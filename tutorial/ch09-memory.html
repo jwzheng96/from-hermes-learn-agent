@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 · Memory 与 FTS5 跨会话搜索 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li class="current"><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part IV · 学习闭环
+  <span class="sep">›</span>
+  第 9 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 09</div>
+  <h1>Memory 与 FTS5 跨会话搜索</h1>
+  <p class="chapter-subtitle">陈述性记忆 vs 程序性记忆；MemGPT 的分层架构；
+    Generative Agents 的记忆流；Hermes 怎么用 SQLite FTS5 做本地全文搜索。</p>
+  <div class="meta">
+    <span>本章约 6,200 字</span>
+    <span>阅读 ~25 分钟</span>
+    <span>关键词：MemGPT · Generative Agents · FTS5 · prefetch · sync_turn</span>
+  </div>
+</div>
+
+<p class="lead">
+  上一章我们看 Skill——程序性记忆。这一章看陈述性记忆：<em>"上次和那家做 retrieval 的创业公司
+  聊过什么"</em>、<em>"用户名字叫什么、喜好是什么"</em>、<em>"两周前我帮他改的那个 bug
+  是哪个文件的"</em>。这种"事情"型的记忆怎么存、怎么取、怎么不爆 context window。
+</p>
+
+<h2 class="section"><span class="secnum">9.1</span>研究脉络：从 ChatGPT memory 到 Generative Agents</h2>
+
+<p>Agent 记忆的研究 2023–2024 年集中爆发。三篇里程碑论文：</p>
+
+<div class="research-card">
+  <div class="ref-label">Foundational Paper</div>
+  <div class="ref-title">Generative Agents: Interactive Simulacra of Human Behavior</div>
+  <div class="ref-meta">Park et al. · arXiv:2304.03442 · UIST 2023</div>
+  <p>
+    Stanford 在 ChatGPT 之后第一篇大规模玩 "LLM agent + memory" 的论文。25 个 LLM agent
+    在虚拟小镇里互相交往，每个 agent 有：
+  </p>
+  <ul>
+    <li><strong>Memory Stream</strong>：所有经历的事件按时间序列存。</li>
+    <li><strong>Retrieval</strong>：基于 recency + importance + relevance 三轴检索。</li>
+    <li><strong>Reflection</strong>：定期把低级事件总结成高级 insight 存回 stream。</li>
+    <li><strong>Planning</strong>：基于 reflection 决定下一步。</li>
+  </ul>
+  <p>
+    这是<em>第一次</em>把 "store everything + retrieve on demand + reflect to compress"
+    系统化提出来。Hermes 的 memory 设计直接受这篇影响。
+  </p>
+</div>
+
+<div class="research-card">
+  <div class="ref-label">Foundational Paper</div>
+  <div class="ref-title">MemGPT: Towards LLMs as Operating Systems</div>
+  <div class="ref-meta">Packer et al. · arXiv:2310.08560 · 2023</div>
+  <p>
+    Berkeley 的论文把<em>"OS 中的 RAM 分层架构"</em>类比到 LLM context 管理。
+    Context window 像 RAM，外部 vector store 像 disk。Agent 用工具
+    （<code>page_in</code>、<code>page_out</code>）显式管理"什么内容在 hot context"。
+  </p>
+  <p>
+    MemGPT 后来开源成 <strong>Letta</strong>（2024 改名），成为最广为引用的开源 memory 框架之一。
+    Hermes 的 memory_provider 接口直接对应它的"core memory" + "archival memory" 概念。
+  </p>
+</div>
+
+<div class="research-card">
+  <div class="ref-label">Industry Practice</div>
+  <div class="ref-title">ChatGPT Memory Feature</div>
+  <div class="ref-meta">OpenAI · 2024</div>
+  <p>
+    OpenAI 给 ChatGPT 加了一个简化版的 memory：用户可以让它"记住"某些事实
+    （我住在北京、我喜欢 Python）。本质是一份<em>用户级 facts list</em>，
+    每次 system prompt 注入。这是 declarative memory 在消费产品里的第一次大规模登陆。
+  </p>
+</div>
+
+<p>这三个工作奠定了今天 Agent memory 的标准范式：</p>
+
+<ol>
+  <li><strong>分层</strong>：hot (context window) + warm (recent sessions) + cold (vector/full-text store)。</li>
+  <li><strong>显式 retrieval tool</strong>：让 LLM 主动决定取什么。</li>
+  <li><strong>定期总结</strong>：从原始事件抽象出 insight。</li>
+  <li><strong>多检索信号</strong>：recency + importance + relevance（向量相似度 / 全文匹配）。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">9.2</span>Hermes 的 Memory 架构</h2>
+
+<p>Hermes 的 memory 走<strong>pluggable</strong>路线——内置一个 SQLite 后端，但允许换成
+   Honcho、Mem0、Hindsight、Supermemory、Holographic 等 8 个外部 provider。</p>
+
+<p>核心接口在 <code>agent/memory_provider.py</code>:</p>
+
+<pre><code><span class="filename">agent/memory_provider.py:42-90</span>
+<span class="k">class</span> <span class="n">MemoryProvider</span>(<span class="n">ABC</span>):
+    <span class="s">"""Abstract base class for memory providers."""</span>
+
+    <span class="k">@property</span>
+    <span class="k">@abstractmethod</span>
+    <span class="k">def</span> <span class="f">name</span>(self) <span class="k">-&gt;</span> str:
+        <span class="s">"""Short identifier (e.g. 'builtin', 'honcho')."""</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">def</span> <span class="f">is_available</span>(self) <span class="k">-&gt;</span> bool:
+        <span class="s">"""Configured + ready? Called at init; no network calls."""</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">def</span> <span class="f">initialize</span>(self, session_id: str, **kwargs) <span class="k">-&gt;</span> <span class="k">None</span>:
+        <span class="s">"""Called once at session start."""</span>
+
+    <span class="k">def</span> <span class="f">system_prompt_block</span>(self) <span class="k">-&gt;</span> str:
+        <span class="s">"""Static block to include in system prompt (provider-side info)."""</span>
+        <span class="k">return</span> <span class="s">""</span>
+
+    <span class="k">def</span> <span class="f">prefetch</span>(self, query: str, *, session_id=<span class="s">""</span>) <span class="k">-&gt;</span> str:
+        <span class="s">"""Recall relevant context for upcoming turn.
+
+        Called before each API call. Return formatted text to inject,
+        or empty string. Should be fast — heavy work via background threads.
+        """</span>
+        <span class="k">return</span> <span class="s">""</span>
+
+    <span class="k">def</span> <span class="f">sync_turn</span>(self, turn_messages) <span class="k">-&gt;</span> <span class="k">None</span>:
+        <span class="s">"""Write after each turn completes."""</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">def</span> <span class="f">get_tool_schemas</span>(self) <span class="k">-&gt;</span> List[Dict[str, Any]]:
+        <span class="s">"""Tool schemas to expose to the LLM (e.g. memory_write).
+
+        Empty list = context-only provider (no user-facing tools).
+        """</span></code></pre>
+
+<div class="code-caption"><span class="listing">Listing 9.1</span> MemoryProvider 抽象类的核心 6 个方法</div>
+
+<p>这 6 个方法定义 memory 的生命周期：</p>
+
+<table>
+  <thead>
+    <tr><th>方法</th><th>调用时机</th><th>典型实现</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>is_available()</code></td><td>Agent 启动</td><td>检查 env vars、依赖包</td></tr>
+    <tr><td><code>initialize()</code></td><td>Session 开始</td><td>建立 DB 连接、启动后台线程</td></tr>
+    <tr><td><code>system_prompt_block()</code></td><td>System prompt 构建</td><td>注入静态提示如"Available memories:"</td></tr>
+    <tr><td><code>prefetch(query)</code></td><td><em>每次</em> API call 前</td><td>异步检索相关记忆</td></tr>
+    <tr><td><code>sync_turn()</code></td><td>每 turn 结束</td><td>写入本轮内容</td></tr>
+    <tr><td><code>get_tool_schemas()</code></td><td>Schema 收集</td><td>暴露 <code>memory_write</code> 等工具</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">9.3</span>MemoryManager：编排者</h2>
+
+<p>MemoryManager 是单一集成点，<code>agent/memory_manager.py</code>:</p>
+
+<pre><code><span class="filename">agent/memory_manager.py:1-36</span>
+<span class="s">"""MemoryManager — orchestrates memory providers for the agent.
+
+Single integration point in run_agent.py. Replaces scattered
+per-backend code with one manager that delegates to providers.
+
+Only ONE external plugin provider is allowed at a time — attempting
+to register a second is rejected with a warning.  This prevents
+tool schema bloat and conflicting memory backends.
+
+Usage in run_agent.py:
+    self._memory_manager = MemoryManager()
+    self._memory_manager.add_provider(plugin_provider)
+
+    # System prompt
+    prompt_parts.append(self._memory_manager.build_system_prompt())
+
+    # Pre-turn
+    context = self._memory_manager.prefetch_all(user_message)
+
+    # Post-turn
+    self._memory_manager.sync_all(user_msg, assistant_response)
+    self._memory_manager.queue_prefetch_all(user_msg)
+"""</span></code></pre>
+
+<p>关键设计决策：</p>
+
+<h3>① 一次只允许一个外部 provider</h3>
+
+<p>
+  为什么？两个 provider 各自暴露 <code>memory_write</code> / <code>memory_search</code> 工具，
+  LLM 不知道用哪个。schema 也膨胀。Hermes 强制单选——你想用 honcho 还是 mem0，
+  二选一。
+</p>
+
+<p>但内置 provider（FTS5 SQLite）可以和外部 provider <em>并存</em>——
+   FTS5 是 context-only（不暴露工具），不和外部 provider 抢工具名。</p>
+
+<h3>② prefetch 是异步的</h3>
+
+<p>
+  <code>prefetch_all()</code> 在每次 API call 前调用——但 <em>不能阻塞</em>。
+  Memory 检索可能要 100ms、可能 1s。
+</p>
+
+<p>Hermes 的做法：</p>
+
+<pre><code><span class="k">def</span> <span class="f">queue_prefetch_all</span>(self, query):
+    <span class="s">"""Kick off prefetch in background thread for *next* turn."""</span>
+    <span class="k">for</span> provider <span class="k">in</span> self.providers:
+        thread = threading.<span class="f">Thread</span>(target=provider.prefetch, args=(query,))
+        thread.<span class="f">start</span>()
+        provider._pending_prefetch = thread
+
+<span class="k">def</span> <span class="f">prefetch_all</span>(self, query) <span class="k">-&gt;</span> str:
+    <span class="s">"""Wait for already-running prefetch, return concatenated context."""</span>
+    parts = []
+    <span class="k">for</span> provider <span class="k">in</span> self.providers:
+        <span class="k">if</span> <span class="f">hasattr</span>(provider, <span class="s">'_pending_prefetch'</span>):
+            provider._pending_prefetch.<span class="f">join</span>(timeout=<span class="num">2.0</span>)   <span class="c"># 上限 2s</span>
+        result = provider.<span class="f">prefetch</span>(query)
+        <span class="k">if</span> result:
+            parts.<span class="f">append</span>(result)
+    <span class="k">return</span> <span class="s">"\n\n"</span>.<span class="f">join</span>(parts)</code></pre>
+
+<p>
+  Turn 结束时 <code>queue_prefetch_all(user_msg)</code> 把检索<em>提前</em>起在后台。
+  下次 API call 前调 <code>prefetch_all</code>，大概率已经跑完了，立即拿结果。
+  这个模式叫 <em>speculative prefetch</em>。
+</p>
+
+<div class="callout tip">
+  <span class="label">设计模式</span>
+  Speculative prefetch 在 OS/DB 里普遍使用（pre-page、read-ahead）。
+  应用到 Agent 上：<em>用户在打字的几秒里把检索做完，下次 API call 时 0 延迟拿结果</em>。
+  这是好的 UX 工程。
+</div>
+
+<h2 class="section"><span class="secnum">9.4</span>Volatile Layer 注入</h2>
+
+<p>prefetch 拿到的内容怎么进 prompt？回顾第 5 章——<strong>它进 volatile 层</strong>：</p>
+
+<pre><code><span class="filename">agent/system_prompt.py:272-280</span>
+<span class="c"># Volatile 层（每轮重算）</span>
+memory_block = agent.memory_manager.<span class="f">build_system_prompt</span>()
+<span class="k">if</span> memory_block:
+    volatile_parts.<span class="f">append</span>(memory_block)
+
+user_profile = _r.<span class="f">load_user_profile</span>()
+<span class="k">if</span> user_profile:
+    volatile_parts.<span class="f">append</span>(user_profile)
+
+volatile_parts.<span class="f">append</span>(<span class="f">f</span><span class="s">"Current time: {now_iso()}\nSession: {sid}\nModel: {agent.model}"</span>)</code></pre>
+
+<p>
+  memory_block 在 system prompt 最末尾。stable + context 部分不动，cache 命中。
+  memory_block 每轮可能不同（不同的 prefetch 结果），它<em>之前</em>的部分仍然 cache 命中。
+</p>
+
+<h3>memory_block 长什么样</h3>
+
+<pre><code># Relevant Memories
+
+[Recent — 5 mins ago]
+User mentioned working on a Hermes plugin called &quot;redact_secrets&quot;.
+The plugin uses the transform_tool_result hook.
+
+[Long-term — 2 weeks ago]
+User's preferred Python style: type hints required, line length 100.
+Avoid mock-heavy tests.
+
+[User profile]
+Name: zjw
+Timezone: Asia/Shanghai
+Working on: agent tooling, multi-modal pipelines.</code></pre>
+
+<p>
+  注意结构化时间标注。这是 Generative Agents 的 <em>recency</em> 维度的实现——
+  让 LLM 知道哪些信息"新鲜"。
+</p>
+
+<h2 class="section"><span class="secnum">9.5</span>FTS5：本地全文搜索</h2>
+
+<p>
+  Hermes 内置的 memory provider 不用向量库——它用 SQLite FTS5。理由：
+</p>
+
+<ul>
+  <li><strong>零依赖</strong>：FTS5 在 SQLite 3.20+ 自带。不用装 chromadb / pinecone / faiss。</li>
+  <li><strong>无 embedding 费用</strong>：不要 embedding API。本地索引。</li>
+  <li><strong>CJK 友好</strong>：用 trigram tokenizer，中日韩文也能搜。</li>
+  <li><strong>本地优先</strong>：所有 session 数据在 <code>~/.hermes/sessions.db</code>，完全离线可用。</li>
+</ul>
+
+<p>看 schema，<code>hermes_state.py</code>:</p>
+
+<pre><code><span class="filename">hermes_state.py (schema)</span>
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,             <span class="c">-- 'cli' | 'telegram' | ...</span>
+    user_id TEXT,
+    model TEXT,
+    model_config TEXT,                <span class="c">-- JSON</span>
+    system_prompt TEXT,
+    parent_session_id TEXT,           <span class="c">-- 压缩链</span>
+    started_at REAL NOT NULL,
+    ended_at REAL,
+    ...
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_call_id TEXT,
+    tool_calls TEXT,                  <span class="c">-- JSON</span>
+    tool_name TEXT,
+    timestamp REAL NOT NULL,
+    ...
+);
+
+<span class="c">-- FTS5 虚拟表：全文索引</span>
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    content,
+    tokenize=<span class="s">'trigram'</span>        <span class="c">-- CJK-friendly</span>
+);
+
+<span class="c">-- 触发器：每条 message INSERT 时同步 FTS 索引</span>
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, content) VALUES (
+        new.id,
+        COALESCE(new.content, <span class="s">''</span>) || <span class="s">' '</span> ||
+        COALESCE(new.tool_name, <span class="s">''</span>) || <span class="s">' '</span> ||
+        COALESCE(new.tool_calls, <span class="s">''</span>)
+    );
+END;
+
+<span class="c">-- 类似的 UPDATE / DELETE 触发器维护一致性</span></code></pre>
+
+<h3>FTS5 怎么用</h3>
+
+<p>查询 <em>"上次和谁聊过 memory startup"</em>：</p>
+
+<pre><code><span class="k">SELECT</span> session_id, role, content, timestamp
+<span class="k">FROM</span> messages_fts JOIN messages USING (rowid)
+<span class="k">WHERE</span> messages_fts <span class="k">MATCH</span> <span class="s">'memory startup'</span>
+<span class="k">ORDER</span> <span class="k">BY</span> bm25(messages_fts)        <span class="c">-- 内置 BM25 相关性</span>
+<span class="k">LIMIT</span> <span class="num">20</span>;</code></pre>
+
+<p>FTS5 优点：</p>
+
+<ul>
+  <li><strong>BM25</strong>：行业标准的全文相关性算法，无需训练。</li>
+  <li><strong>布尔查询</strong>：<code>'memory AND (startup OR company)'</code>。</li>
+  <li><strong>短语</strong>：<code>'"prompt cache"'</code>。</li>
+  <li><strong>NEAR</strong>：<code>'memory NEAR/5 startup'</code>。</li>
+</ul>
+
+<p>缺点：</p>
+
+<ul>
+  <li><strong>不懂语义</strong>：搜 "memory" 找不到 "knowledge storage"——这是字面匹配的本质限制。</li>
+  <li><strong>不会概括</strong>：搜不出"用户喜欢 Python"，因为这是 inferred fact，原话没说。</li>
+</ul>
+
+<p>所以 Hermes 的策略：<strong>FTS5 是 fallback，需要语义检索时用外部 provider</strong>。
+   两个并存。FTS5 给 <code>session_search</code> 工具用（让 LLM 显式查"过去说过什么"）。</p>
+
+<h2 class="section"><span class="secnum">9.6</span>session_search：让 LLM 显式查历史</h2>
+
+<p>用户问"上次我们讨论 redis 缓存策略时你说什么"——LLM 调 <code>session_search</code>：</p>
+
+<pre><code>session_search(
+    query=<span class="s">"redis 缓存策略"</span>,
+    days_back=<span class="num">30</span>,
+    limit=<span class="num">10</span>,
+)</code></pre>
+
+<p>实际查询：</p>
+
+<pre><code><span class="k">SELECT</span> session_id, role, content, timestamp
+<span class="k">FROM</span> messages_fts JOIN messages USING (rowid)
+<span class="k">WHERE</span> messages_fts <span class="k">MATCH</span> <span class="s">'redis 缓存 策略'</span>
+  <span class="k">AND</span> timestamp <span class="k">&gt;</span> :ts_30_days_ago
+<span class="k">ORDER</span> <span class="k">BY</span> bm25(messages_fts), timestamp <span class="k">DESC</span>
+<span class="k">LIMIT</span> <span class="num">10</span>;</code></pre>
+
+<p>返回的不只是 message，还有 session 上下文。Hermes 可能把整个 session 的前后几条
+   一起返回，让 LLM 有完整 context。</p>
+
+<h3>LLM 总结再注入</h3>
+
+<p>
+  原始 raw match 可能是 200KB。直接塞回 messages 会爆 context。所以 Hermes 在
+  <code>session_search</code> 工具里加了一步：<em>用 auxiliary LLM 把搜索结果概括成一段</em>。
+</p>
+
+<pre><code><span class="k">def</span> <span class="f">session_search_tool</span>(query, days_back=<span class="num">30</span>, **kw):
+    raw_results = <span class="f">_fts5_query</span>(query, days_back)
+    <span class="k">if</span> <span class="f">len</span>(raw_results) &lt;= <span class="num">3</span>:
+        <span class="k">return</span> <span class="f">_format_raw</span>(raw_results)
+
+    <span class="c"># 多于 3 条 → 用便宜小模型概括</span>
+    summary = aux_llm.<span class="f">chat</span>(
+        <span class="f">f</span><span class="s">"User searched for: {query}. Here are matching messages "</span>
+        <span class="f">f</span><span class="s">"from past {days_back} days:\n\n{raw_results}\n\n"</span>
+        <span class="s">"Summarize the relevant facts in 5 bullet points or fewer."</span>
+    )
+    <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"summary"</span>: summary, <span class="s">"match_count"</span>: <span class="f">len</span>(raw_results)})</code></pre>
+
+<p>
+  这是 Anthropic 2025 "context engineering" 里说的 <em>just-in-time + summarization</em>
+  的具体实现。
+</p>
+
+<h2 class="section"><span class="secnum">9.7</span>外部 Provider：Honcho 与 Mem0</h2>
+
+<p>FTS5 不够智能时，外部 provider 上场。Hermes 仓库里默认带 8 个：</p>
+
+<table>
+  <thead>
+    <tr><th>Provider</th><th>特点</th><th>定位</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Honcho</strong> (plastic-labs)</td><td>Dialectic 用户建模</td><td>"理解用户性格" — Anthropic-style user modeling</td></tr>
+    <tr><td><strong>Mem0</strong></td><td>结构化事实抽取 + 向量检索</td><td>类似 ChatGPT memory，更结构化</td></tr>
+    <tr><td><strong>Hindsight</strong></td><td>事件回放 + reflection</td><td>类似 Generative Agents 的 reflection</td></tr>
+    <tr><td><strong>Supermemory</strong></td><td>SaaS 服务（云端）</td><td>跨设备同步</td></tr>
+    <tr><td><strong>Holographic</strong></td><td>基于 holographic reduced representation</td><td>实验性</td></tr>
+    <tr><td><strong>RetainDB / OpenViking / Byterover</strong></td><td>其他社区项目</td><td>各有专长</td></tr>
+  </tbody>
+</table>
+
+<p>每个都是 <code>plugins/memory/&lt;name&gt;/</code> 下的 Python 包，实现 <code>MemoryProvider</code> ABC。</p>
+
+<h3>Honcho 简介</h3>
+
+<p>
+  Honcho 来自 Plastic Labs，做的是 <em>"Theory of Mind for AI agents"</em>——
+  让 Agent 长期维护一个对每个用户的"心理模型"。它存的不是 raw messages，
+  而是<em>推理</em>出来的事实：
+</p>
+
+<pre><code>{
+  <span class="s">"user_id"</span>: <span class="s">"alice"</span>,
+  <span class="s">"facts"</span>: [
+    <span class="s">"Has a 7-year-old daughter named Emma"</span>,
+    <span class="s">"Works as a backend engineer at Stripe"</span>,
+    <span class="s">"Prefers terse responses, dislikes hedging"</span>,
+    <span class="s">"Has cited burnout once in past month"</span>
+  ],
+  <span class="s">"last_interaction"</span>: <span class="s">"2026-05-23T18:42:00Z"</span>
+}</code></pre>
+
+<p>这些事实由 Honcho 在后台用一个 LLM 从对话里抽出来。下次 user prompt 时，
+   相关事实通过 <code>prefetch()</code> 注入到 volatile 层。</p>
+
+<h2 class="section"><span class="secnum">9.8</span>2026 Agent Memory 框架全景</h2>
+
+<p>
+  2024–2026 Agent memory 这个领域出现了若干竞争方案。
+  Hermes 通过 <code>MemoryProvider</code> ABC 支持所有主流——但你应该理解每家的设计哲学，
+  选合适的接入。
+</p>
+
+<h3>Letta (formerly MemGPT)</h3>
+
+<div class="research-card">
+  <div class="ref-label">Framework</div>
+  <div class="ref-title">Letta — MemGPT 的产品化继承者</div>
+  <div class="ref-meta">letta.com · open source · 2024 改名</div>
+  <p>
+    Letta 是 MemGPT 论文作者团队（UC Berkeley → 创业）把研究成果产品化。架构沿用 MemGPT
+    的 <em>OS-like memory</em> 思想：核心记忆（core memory）始终在 context、归档记忆（archival memory）按需 page in。
+  </p>
+  <p>
+    2025 年起 Letta 加入：
+  </p>
+  <ul>
+    <li><strong>Agent persistence</strong>：每个 agent 自己有 ID、自己的内存数据库，跨重启保留。</li>
+    <li><strong>Memory blocks</strong>：把 memory 切成命名块（"human"、"persona"、"scratch"），agent 用工具显式编辑。</li>
+    <li><strong>多 agent 共享内存</strong>：通过共享 block 实现 agent 间状态同步。</li>
+  </ul>
+  <p>
+    适合：长跑 agent、需要自我管理 memory 的场景。Letta 比 Hermes 内置 memory 更结构化、更"自主"。
+  </p>
+</div>
+
+<h3>Mem0 — 商业向</h3>
+
+<div class="research-card">
+  <div class="ref-label">Framework</div>
+  <div class="ref-title">Mem0 — Hosted Memory Layer</div>
+  <div class="ref-meta">mem0.ai · SaaS + 开源 SDK</div>
+  <p>
+    Mem0 走 SaaS 路线：你调它的 API，它在云端维护一份"用户 fact graph"。后台 LLM 自动抽 facts、
+    判断旧 fact 是否需要更新、做去重和冲突解决。
+  </p>
+  <p>
+    设计取舍：
+  </p>
+  <ul>
+    <li>✓ Zero-config — 调 API 就完事，没有 schema 设计负担。</li>
+    <li>✓ 自动冲突解决 — 用户说"我现在用 3"会自动覆盖旧的"用 2"。</li>
+    <li>✗ 数据在 Mem0 服务器（企业敏感）。</li>
+    <li>✗ 黑盒——你不知道 LLM 抽出了什么 fact，需要审计时痛苦。</li>
+  </ul>
+  <p>
+    Hermes 通过 <code>plugins/memory/mem0/</code> 支持。适合消费者产品、不适合企业内部。
+  </p>
+</div>
+
+<h3>A-Mem — 学术新方向</h3>
+
+<div class="research-card">
+  <div class="ref-label">Research</div>
+  <div class="ref-title">A-Mem: Agentic Memory for LLM Agents</div>
+  <div class="ref-meta">arXiv:2502.12110 · 2025</div>
+  <p>
+    把 memory 本身当作一个<em>"动态知识图谱"</em>——每条新 memory 进来时让 LLM 决定：
+    新建节点？合并到已有节点？建立新链接？
+  </p>
+  <p>
+    创新点：<em>每条 memory 不是孤立写入，而是触发"局部图更新"</em>。让 memory 之间形成关联，
+    检索时能 walking 上下游事实。
+  </p>
+  <p>
+    适合：研究、个人 assistant。生产级稳定性还在验证。
+  </p>
+</div>
+
+<h3>Anthropic Memory Tool (2026)</h3>
+
+<p>
+  2026 年初 Anthropic 把 memory 也做成 API 一级 feature——
+  把 ChatGPT memory 那种"记住用户偏好"做进 Claude API。
+  你 enable 后，Claude 自动维护 user memory，跨 conversation 持久。
+</p>
+
+<p>
+  对 Hermes 的影响：Anthropic 这个 memory tool 是<em>客户端不可见的</em>（Claude 自己管），
+  这意味着 Hermes 在 Claude 上跑时，会"同时有两层 memory"——Hermes 自己的 + Anthropic 服务端的。
+  目前 Hermes 默认禁用 Anthropic 服务端 memory，避免双写冲突。
+</p>
+
+<h3>四家对比矩阵</h3>
+
+<table>
+  <thead>
+    <tr><th></th><th>Hermes FTS5</th><th>Letta</th><th>Mem0</th><th>A-Mem</th><th>Anthropic Memory</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>存储位置</td><td>本地</td><td>本地/云</td><td>SaaS</td><td>本地</td><td>Anthropic 云端</td></tr>
+    <tr><td>抽取机制</td><td>FTS5 索引</td><td>Agent 工具自管</td><td>后台 LLM 抽 fact</td><td>LLM 维护图</td><td>Claude 内部</td></tr>
+    <tr><td>语义检索</td><td>BM25</td><td>Embedding</td><td>Embedding</td><td>图遍历</td><td>未公开</td></tr>
+    <tr><td>对用户透明度</td><td>完全</td><td>高</td><td>中（黑盒）</td><td>中</td><td>低</td></tr>
+    <tr><td>适合</td><td>个人 / 离线</td><td>长跑 agent</td><td>消费产品</td><td>研究</td><td>纯 Claude 用户</td></tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+  <span class="label">选哪个</span>
+  90% 用户用 Hermes 内置 FTS5 + USER.md 就够。<br>
+  数据敏感企业：内置 FTS5，禁用一切外部 memory provider。<br>
+  长跑 agent / 多 agent 共享状态：Letta。<br>
+  消费产品要"懂用户"：Mem0。<br>
+  研究项目想做创新：A-Mem 或自己实现 MemoryProvider。
+</div>
+
+<h3>未解决问题：Memory 一致性</h3>
+
+<p>所有上面这些方案，2026 年仍未解决<em>"memory inconsistency"</em>问题。看一个真实情景：</p>
+
+<pre><code>2025-09: User 跟 Agent 说 "I prefer Python."
+2026-03: User 跟 Agent 说 "I'm now mostly writing Go."
+2026-05: User: "Recommend a side project."
+
+Agent 应该推荐 Go 项目还是 Python 项目？</code></pre>
+
+<p>不同 memory 系统给的答案不一样：</p>
+
+<ul>
+  <li><strong>FTS5</strong>：两条 fact 都返回，让 LLM 自己看时间戳决定。
+      LLM 通常能正确选最近的——但如果中间隔太久，老 fact 可能进不了 prefetch。</li>
+  <li><strong>Mem0</strong>：尝试自动合并/覆盖。但"取代关系"判断不一定准——用户可能两种都写。</li>
+  <li><strong>Letta</strong>：让 agent 主动更新 memory block，但需要 agent 注意到旧 fact 过期。</li>
+  <li><strong>A-Mem</strong>：图节点添加 "supersedes" 链接，理论上最优雅；实践依赖 LLM 判断准确性。</li>
+</ul>
+
+<p>这是开放研究问题。本书第 13 章 13.15 节也提到这是 2026 还没解决的几大方向之一。</p>
+
+<h2 class="section"><span class="secnum">9.9</span>USER.md：手动 declarative memory</h2>
+
+<p>
+  除了自动 memory，Hermes 还支持<em>手动声明</em>。<code>~/.hermes/USER.md</code>：
+</p>
+
+<pre><code># About Me
+
+- Name: zjw
+- Role: ML/Agent engineer
+- Located: Beijing, China timezone
+- Languages: Chinese (native), English (fluent)
+- Coding preferences:
+  - Python 3.11+; type hints required
+  - Line length 100
+  - Avoid mock-heavy tests, prefer integration tests
+  - Comment density: low (let names speak)
+
+# My Stack
+
+- Daily editor: Cursor / Hermes Agent
+- Primary language: Python, TypeScript, Go
+- Cloud: GCP + Modal for ML workloads
+
+# Things I Don't Want
+
+- Don't preface answers with "Great question!"
+- Don't end emails with corporate disclaimer
+- Don't generate React class components (always functional)</code></pre>
+
+<p>
+  这文件在 volatile 层每轮注入。LLM 立即知道你的偏好。
+  比 Honcho 简单，比 OpenAI 的 memory 灵活。
+</p>
+
+<div class="callout">
+  <span class="label">实践</span>
+  你的 Agent 上线第一天就应该填 <code>USER.md</code>。
+  这是<em>性价比最高</em>的 personalization——五分钟写完，每次对话都被参考，
+  且你可以随时编辑、不需要"忘掉"操作。
+</div>
+
+<h2 class="section"><span class="secnum">9.10</span>记忆的写时机：sync_turn</h2>
+
+<p>什么时候写记忆？每个 turn 结束时调 <code>sync_turn()</code>:</p>
+
+<pre><code><span class="filename">run_agent.py (相关部分)</span>
+<span class="k">def</span> <span class="f">run_conversation</span>(self, ...):
+    ...
+    <span class="c"># Turn 结束</span>
+    self.memory_manager.<span class="f">sync_all</span>(
+        user_msg=user_message,
+        assistant_response=final_response,
+    )
+    self.memory_manager.<span class="f">queue_prefetch_all</span>(user_message)
+    ...</code></pre>
+
+<p>每个 provider 自己决定怎么处理：</p>
+
+<ul>
+  <li><strong>FTS5</strong>：把 turn 里的所有 message 写进 messages 表，触发器自动更新 FTS。</li>
+  <li><strong>Honcho</strong>：起后台任务用 LLM 抽事实。</li>
+  <li><strong>Mem0</strong>：扔进 vector store。</li>
+</ul>
+
+<p>关键：<em>sync_turn 不应该阻塞 Agent 主循环</em>。重活都丢到后台线程。
+   Agent 接下来的 turn 不等 memory 写完。</p>
+
+<h2 class="section"><span class="secnum">9.11</span>Compaction 链接 (parent_session_id)</h2>
+
+<p>
+  第 3 章讲过 context compression——超过窗口时让小模型总结历史。但
+  压缩后<em>原始历史保留在哪</em>？
+</p>
+
+<p>Hermes 的设计：</p>
+
+<ol>
+  <li>触发压缩时，开一个<em>新 session</em>，<code>parent_session_id</code> 指向旧 session。</li>
+  <li>新 session 的 messages 第一条是"前一个 session 的总结"。</li>
+  <li>旧 session 完整保留在 DB，可以 <code>session_search</code> 查。</li>
+</ol>
+
+<p>这样形成<em>压缩链</em>：</p>
+
+<pre class="mermaid">
+flowchart TB
+  S1["session_001<br/><i>4 hours</i>"] -->|压缩| S2["session_002<br/><i>4 hours, parent=001</i>"]
+  S2 -->|压缩| S3["session_003<br/><i>4 hours, parent=002</i>"]
+  S3 -->|压缩| S4["session_004<br/><b>now, parent=003</b>"]:::current
+
+  S4 -.->|当前 turn 只看这段| Hot["Hot context<br/>(短, 高保真)"]:::hot
+  S1 -.->|FTS5 搜索可跨链回溯| Arch["Archival memory<br/>(完整历史)"]:::arch
+  S2 -.-> Arch
+  S3 -.-> Arch
+
+  classDef current fill:#f5ede0,stroke:#8b1538,color:#8b1538
+  classDef hot fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+  classDef arch fill:#f0eaf1,stroke:#6b4488,color:#6b4488
+</pre>
+
+<p>这是 MemGPT 的 <em>archival memory</em> 思想的实现——
+   hot context 短而精，archival 完整但只能按需查。</p>
+
+<h2 class="section"><span class="secnum">9.12</span>本章带走的</h2>
+
+<ul>
+  <li><strong>Memory 是陈述性记忆</strong>。研究脉络：Generative Agents → MemGPT → ChatGPT Memory。</li>
+  <li>Hermes 用 <strong>MemoryProvider ABC</strong> 让 memory 后端可插拔。一次只允许一个外部 provider 防 schema 冲突。</li>
+  <li>6 个生命周期方法：<code>is_available</code> / <code>initialize</code> / <code>system_prompt_block</code> / <code>prefetch</code> / <code>sync_turn</code> / <code>get_tool_schemas</code>。</li>
+  <li><strong>Speculative prefetch</strong>：在 turn 结束时为下一 turn 提前 background 检索。</li>
+  <li>检索结果进 <strong>volatile 层</strong>，不破 cache。</li>
+  <li>内置后端用 <strong>SQLite FTS5</strong>——零依赖、零费用、CJK 友好、BM25 排序。</li>
+  <li>FTS5 不懂语义，所以 <code>session_search</code> 工具在 raw match &gt; 3 条时<em>用小模型概括</em>。</li>
+  <li>8 个内置外部 provider（Honcho 主推 user modeling、Mem0 主推结构化事实等）。</li>
+  <li><code>USER.md</code> 提供手动 declarative memory——五分钟搞定 personalization。</li>
+  <li>Compaction 用 <strong>parent_session_id 链</strong>：hot 短，archival 全。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 Hermes 一次只允许一个外部 memory provider？两个会怎样？
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      写你自己的 <code>USER.md</code>。至少 5 条偏好。下次跑 Hermes 时观察它怎么用。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Speculative prefetch 在什么场景下会出错？设计一个 turn 序列让 prefetch 的内容"过时"。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      自己实现一个最简 MemoryProvider：把每条 user message 用 <code>echo</code> 写到一个 JSON 文件，
+      prefetch 时返回最近 5 条。约 50 行代码。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      FTS5 不懂语义。设计一个 hybrid 检索方案：<em>先用 FTS5 取 top-50，再用 embedding 重排到 top-10</em>。
+      讨论：什么场景下 hybrid 比纯向量检索强、什么时候反过来？
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Generative Agents 论文里的 "Reflection" 机制是<em>定期把低级事件总结成高级 insight</em>。
+      Hermes 的 Curator（下一章）做的是 skill 维护——能不能把同一种机制扩展到 memory？
+      设计一个"Memory Curator"。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch08-skills.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 8 章 · Skills 程序性记忆</div>
+  </a>
+  <a class="next" href="ch10-curator.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 10 章 · Curator 自我维护</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

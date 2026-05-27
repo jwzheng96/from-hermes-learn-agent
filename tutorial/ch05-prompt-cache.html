@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 5 章 · System Prompt 与缓存经济 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li class="current"><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part II · 核心循环
+  <span class="sep">›</span>
+  第 5 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 05</div>
+  <h1>System Prompt 与缓存经济</h1>
+  <p class="chapter-subtitle">一次错误的 system prompt 修改可能让你的 API 账单暴涨 10 倍。
+    Hermes 用三层结构 + 几条铁律避免这件事。</p>
+  <div class="meta">
+    <span>本章约 5,500 字</span>
+    <span>阅读 ~20 分钟</span>
+    <span>关键词：prompt cache · stable/context/volatile · cache_control</span>
+  </div>
+</div>
+
+<p class="lead">
+  Agent 的成本 90% 来自 input tokens。一个 10 轮对话的 turn，每轮把 8K system prompt 重发一次，
+  就是 80K input tokens。换成钱：以 Claude Opus 计算（input $15/M tokens），
+  这次对话光 system prompt 就花 $1.20。如果 prompt cache 命中，价格降到 $0.12——
+  10 倍差距。Agent 工程里没什么比这条线更值钱了。
+</p>
+
+<h2 class="section"><span class="secnum">5.1</span>Prompt Cache 是什么</h2>
+
+<p>
+  Prompt cache 的核心想法：<em>同一段 prompt 前缀被反复使用时，server 端缓存它的 KV-state，
+  下次相同前缀的请求只算"增量"部分的算力</em>。
+</p>
+
+<p>主流 provider 都有：</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Provider</th>
+      <th>缓存方式</th>
+      <th>费率（cached input vs normal input）</th>
+      <th>TTL</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Anthropic</td>
+      <td>显式（<code>cache_control</code> 标记）</td>
+      <td>cached: 10% (read) / 125% (write)</td>
+      <td>5 min / 1 hour 两档</td>
+    </tr>
+    <tr>
+      <td>OpenAI</td>
+      <td>自动（≥1024 tokens 前缀）</td>
+      <td>cached: 50%</td>
+      <td>5–10 min</td>
+    </tr>
+    <tr>
+      <td>DeepSeek</td>
+      <td>自动</td>
+      <td>cached: 10%</td>
+      <td>动态</td>
+    </tr>
+    <tr>
+      <td>Google Gemini</td>
+      <td>显式（context caching API）</td>
+      <td>cached: 25% + 小时存储费</td>
+      <td>用户配置</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  无论哪家，<strong>cache 命中的条件都是：发送的 messages 前缀和上次<em>逐 token</em> 完全一致</strong>。
+  哪怕中间多一个空格、少一个标点，cache 就破。
+</p>
+
+<div class="callout warn">
+  <span class="label">铁律</span>
+  Agent 的所有 prompt 管理逻辑，第一原则是：
+  <em>不要修改已经发出去的 prompt 前缀</em>。所有"动态内容"必须 append 到末尾，
+  不能 insert 中间。
+</div>
+
+<h2 class="section"><span class="secnum">5.2</span>System Prompt 的三层结构</h2>
+
+<p>
+  Hermes 把 system prompt 切成三层，每层有不同的稳定性。看
+  <code>agent/system_prompt.py:60-77</code>：
+</p>
+
+<pre><code><span class="filename">agent/system_prompt.py:60-77</span>
+<span class="k">def</span> <span class="f">build_system_prompt_parts</span>(agent, system_message=<span class="k">None</span>) <span class="k">-&gt;</span> Dict[str, str]:
+    <span class="s">"""Assemble the system prompt as three ordered parts.
+
+    Returns a dict with three keys:
+      * stable   — identity, tool guidance, skills prompt,
+                   environment hints, platform hints, model-family
+                   operational guidance.
+      * context  — context files (AGENTS.md, .cursorrules, etc.)
+                   and caller-supplied system_message.
+      * volatile — memory snapshot, user profile, external
+                   memory provider block, timestamp line.
+    """</span>
+    stable_parts = []
+    context_parts = []
+    volatile_parts = []
+    ...
+    <span class="k">return</span> {
+        <span class="s">"stable"</span>: <span class="s">"\n\n"</span>.<span class="f">join</span>(stable_parts),
+        <span class="s">"context"</span>: <span class="s">"\n\n"</span>.<span class="f">join</span>(context_parts),
+        <span class="s">"volatile"</span>: <span class="s">"\n\n"</span>.<span class="f">join</span>(volatile_parts),
+    }</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 5.1</span> 三层 prompt 的核心入口</div>
+
+<p>三层的稳定性对照：</p>
+
+<table>
+  <thead>
+    <tr><th>层</th><th>包含</th><th>稳定性</th><th>变化触发条件</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>stable</strong></td>
+      <td>SOUL.md 身份、工具用法、模型家族指导</td>
+      <td>整个 session 不变</td>
+      <td>切 session 或重启</td>
+    </tr>
+    <tr>
+      <td><strong>context</strong></td>
+      <td>AGENTS.md、.cursorrules、调用方 system_message</td>
+      <td>session 内一般不变</td>
+      <td>切工作目录、用户改文件</td>
+    </tr>
+    <tr>
+      <td><strong>volatile</strong></td>
+      <td>Memory 快照、user profile、时间戳</td>
+      <td>每轮可能变</td>
+      <td>每次 turn / 内存更新</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>拼接顺序是 <code>stable + context + volatile</code>，<em>从最稳定到最易变</em>。
+   这个顺序极其重要——它直接决定 cache 命中率。</p>
+
+<h3>为什么这个顺序</h3>
+
+<p>
+  Prompt cache 命中的边界是<em>最长公共前缀</em>。如果你把 volatile 放在最前面，
+  <em>所有</em>后面的稳定内容也跟着被破坏。所以要让最稳定的在最前。
+</p>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph Bad["❌ 坏的顺序：volatile + stable"]
+    direction TB
+    B1["Turn 1: [时间戳-T1] [身份] [工具] [AGENTS.md]"]
+    B2["Turn 2: [时间戳-T2] [身份] [工具] [AGENTS.md]"]
+    B1 -.->|"T1 != T2 ⇒ 前缀全变"| B2
+    BAll["⚠️ 全部 cache miss"]:::warn
+    B2 --> BAll
+  end
+  subgraph Good["✅ 好的顺序：stable + context + volatile"]
+    direction TB
+    G1["Turn 1: [身份] [工具] [AGENTS.md] [时间戳-T1]"]
+    G2["Turn 2: [身份] [工具] [AGENTS.md] [时间戳-T2]"]
+    G1 -.->|"前缀完全相同"| G2
+    GHit["✓ 前缀 cache 命中<br/>只有末尾时间戳是 miss"]:::good
+    G2 --> GHit
+  end
+  classDef warn fill:#faf0e3,stroke:#b85c00,color:#b85c00
+  classDef good fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+</pre>
+
+<h2 class="section"><span class="secnum">5.3</span>每层装什么</h2>
+
+<h3>Stable 层 — 不变的灵魂</h3>
+
+<p>看 system_prompt.py 第 84–254 行：</p>
+
+<pre><code><span class="filename">agent/system_prompt.py:84-150 (节选)</span>
+<span class="c"># Agent 身份（来自 SOUL.md 或 DEFAULT_AGENT_IDENTITY）</span>
+_soul_content = _r.<span class="f">load_soul_md</span>()
+stable_parts.<span class="f">append</span>(_soul_content)
+
+<span class="c"># 工具具体使用指导（条件加入）</span>
+<span class="k">if</span> <span class="s">"memory"</span> <span class="k">in</span> agent.valid_tool_names:
+    tool_guidance.<span class="f">append</span>(MEMORY_GUIDANCE)
+<span class="k">if</span> <span class="s">"session_search"</span> <span class="k">in</span> agent.valid_tool_names:
+    tool_guidance.<span class="f">append</span>(SESSION_SEARCH_GUIDANCE)
+<span class="k">if</span> <span class="s">"todo"</span> <span class="k">in</span> agent.valid_tool_names:
+    tool_guidance.<span class="f">append</span>(TODO_GUIDANCE)
+
+<span class="c"># 工具调用纪律（某些模型容易"光说不练"）</span>
+<span class="k">if</span> agent.valid_tool_names:
+    _enforce = agent._tool_use_enforcement
+    <span class="k">if</span> _enforce <span class="k">is</span> <span class="k">True</span> <span class="k">or</span> agent.model <span class="k">in</span> TOOL_USE_ENFORCEMENT_MODELS:
+        stable_parts.<span class="f">append</span>(TOOL_USE_ENFORCEMENT_GUIDANCE)
+
+<span class="c"># 模型家族特定指导（Gemini / Qwen / GPT 各有不同 quirk）</span>
+model_family_block = <span class="f">_get_model_family_guidance</span>(agent.model)
+<span class="k">if</span> model_family_block:
+    stable_parts.<span class="f">append</span>(model_family_block)</code></pre>
+
+<p>设计精神：</p>
+
+<ul>
+  <li><strong>条件加入指导</strong>：没启用某工具就不加它的指导。避免无意义的 token。</li>
+  <li><strong>模型家族区分</strong>：Gemini 倾向"过度补全"，加一段"answer concisely"；
+      Qwen 在 reasoning 后偶尔忘记 tool_call_id，加一段提醒……每个 block 都是踩坑得来的。</li>
+  <li><strong>所有内容启动时拼好，session 内永不重算</strong>。</li>
+</ul>
+
+<h3>Context 层 — 工作区相关</h3>
+
+<pre><code><span class="filename">agent/system_prompt.py:260-270</span>
+<span class="k">if</span> system_message <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+    context_parts.<span class="f">append</span>(system_message)
+
+<span class="k">if</span> <span class="k">not</span> agent.skip_context_files:
+    context_files_prompt = _r.<span class="f">build_context_files_prompt</span>(
+        cwd=_context_cwd,
+        skip_soul=_soul_loaded,
+    )
+    <span class="k">if</span> context_files_prompt:
+        context_parts.<span class="f">append</span>(context_files_prompt)</code></pre>
+
+<p><code>build_context_files_prompt()</code> 扫描当前工作目录，自动发现并包括：</p>
+
+<ul>
+  <li><code>AGENTS.md</code> — 项目对 AI 的开发指南（Hermes 本身有 53KB 的）</li>
+  <li><code>.cursorrules</code> — Cursor IDE 用的规则文件</li>
+  <li><code>CLAUDE.md</code> — Claude Code 用的指南</li>
+  <li>用户自定义的其他 <code>.md</code></li>
+</ul>
+
+<div class="callout">
+  <span class="label">设计</span>
+  Hermes 把 AGENTS.md/CLAUDE.md/.cursorrules 都当成<em>同一种东西</em>——
+  项目对 AI 的"使用说明"。这是 2024 年起业界的共识。第 14 章我们会讲怎么给你自己的项目写这种文件。
+</div>
+
+<h3>Volatile 层 — 每轮可能变</h3>
+
+<pre><code><span class="filename">agent/system_prompt.py:272-280</span>
+<span class="c"># Memory snapshot — 上次 sync 的内存状态</span>
+memory_block = agent.memory_manager.<span class="f">build_system_prompt</span>()
+<span class="k">if</span> memory_block:
+    volatile_parts.<span class="f">append</span>(memory_block)
+
+<span class="c"># User profile — USER.md</span>
+user_profile = _r.<span class="f">load_user_profile</span>()
+<span class="k">if</span> user_profile:
+    volatile_parts.<span class="f">append</span>(user_profile)
+
+<span class="c"># 时间戳 + session + model — 总是最后一行</span>
+volatile_parts.<span class="f">append</span>(<span class="f">f</span><span class="s">"Current time: {now_iso()}\nSession: {sid}\nModel: {agent.model}"</span>)</code></pre>
+
+<p>
+  注意时间戳——它每轮都变。所以 volatile 层就算第一次也注定 cache miss。
+  但因为它在最末尾，<em>只影响它自己之后</em>（其实没有了），前面 stable + context 该命中还是命中。
+</p>
+
+<h2 class="section"><span class="secnum">5.4</span>cache_control 标记（Anthropic）</h2>
+
+<p>
+  Anthropic 的 cache 是<em>显式</em>——你要主动加 <code>cache_control</code> 字段告诉它
+  "在这里设个 cache breakpoint"。最多 4 个 breakpoints。Hermes 的标注策略：
+</p>
+
+<pre><code><span class="c"># Anthropic 兼容 endpoint 的 messages 示例</span>
+[
+    {
+        <span class="s">"role"</span>: <span class="s">"system"</span>,
+        <span class="s">"content"</span>: [
+            {<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: stable_part},
+            {<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: context_part,
+             <span class="s">"cache_control"</span>: {<span class="s">"type"</span>: <span class="s">"ephemeral"</span>}},   <span class="c"># ← 缓存到这里</span>
+            {<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: volatile_part}        <span class="c"># volatile 不被 cache</span>
+        ]
+    },
+    {<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"..."</span>},
+    ...
+]</code></pre>
+
+<p>这个 <code>cache_control</code> 标记的语义：<em>"从消息开头到这里为止，是缓存目标"</em>。
+   Hermes 通常在 context_part 末尾标记，volatile 部分不进缓存。</p>
+
+<h3>tools 的 cache 标记</h3>
+
+<p>
+  Tools schemas 数组本身也算 input tokens——可能上千 tokens。Anthropic 允许给 tools 加 cache_control：
+</p>
+
+<pre><code>tools = [
+    {
+        <span class="s">"type"</span>: <span class="s">"function"</span>,
+        <span class="s">"function"</span>: {...},
+    },
+    ...
+    {
+        <span class="s">"type"</span>: <span class="s">"function"</span>,
+        <span class="s">"function"</span>: {...},
+        <span class="s">"cache_control"</span>: {<span class="s">"type"</span>: <span class="s">"ephemeral"</span>}   <span class="c"># 最后一个工具标记</span>
+    }
+]</code></pre>
+
+<p>
+  Hermes 在 tools 列表末尾自动打标记。所以工具 schema 的 cache 命中率非常高——
+  只要你不改 toolset，整个 session 都命中。
+</p>
+
+<h2 class="section"><span class="secnum">5.5</span>什么操作会破缓存</h2>
+
+<p>Hermes 的 AGENTS.md 里有这样一条铁律：</p>
+
+<blockquote>
+  Hermes-Agent ensures caching remains valid throughout a conversation. <strong>Do NOT
+  implement changes that would:</strong>
+  <ul>
+    <li>Alter past context mid-conversation</li>
+    <li>Change toolsets mid-conversation</li>
+    <li>Reload memories or rebuild system prompts mid-conversation</li>
+  </ul>
+  <footer>Hermes AGENTS.md</footer>
+</blockquote>
+
+<p>具体来说，下面这些操作会让 cache 报废：</p>
+
+<table>
+  <thead>
+    <tr><th>动作</th><th>破缓存吗</th><th>原因</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>追加新消息（user / assistant）</td><td>否</td><td>纯 append，前缀不变</td></tr>
+    <tr><td>修改 system prompt</td><td><strong>是</strong></td><td>前缀第一段就变了</td></tr>
+    <tr><td>修改 tools 列表（即使只是顺序）</td><td><strong>是</strong></td><td>tools 在 prompt cache 范围内</td></tr>
+    <tr><td>在历史中间插入消息</td><td><strong>是</strong></td><td>前缀变了</td></tr>
+    <tr><td>修改历史消息（编辑过去）</td><td><strong>是</strong></td><td>同上</td></tr>
+    <tr><td>把 volatile 内容（时间戳）放进 stable</td><td><strong>是</strong></td><td>每轮变化的内容在前缀范围</td></tr>
+    <tr><td>每轮重算 system prompt（即使内容相同）</td><td>不应该</td><td>字节级要一致，再算一次有风险</td></tr>
+  </tbody>
+</table>
+
+<h3>正确做法：append-only</h3>
+
+<p>所有动态信息<em>只 append 到末尾</em>。Hermes 这条规则被多个机制实现：</p>
+
+<ol>
+  <li><strong>Skills 加载</strong>：不改 system prompt，而是<em>追加</em>一条 user message。
+      包含 SKILL.md 内容。这样 system prompt cache 不破。</li>
+  <li><strong>Memory prefetch</strong>：每轮把检索结果<em>追加</em>到 volatile 层。
+      stable 和 context 不变。</li>
+  <li><strong>工具结果</strong>：作为新的 tool message append。</li>
+  <li><strong>用户中途调指令（比如 /model）</strong>：<em>不立即生效</em>，下个 session 才生效。
+      或者用 <code>--now</code> flag 显式接受破缓存。</li>
+</ol>
+
+<div class="callout tip">
+  <span class="label">slash 命令的 cache-aware 设计</span>
+  Hermes 的 <code>/skills install</code> 默认<em>deferred invalidation</em>——
+  装完不立即重建 prompt，等下个 session 自动生效。如果你急着要：
+  <code>/skills install --now</code>，承担一次 cache miss 的成本。
+  这条原则贯穿所有"会修改 prompt"的命令。
+</div>
+
+<h2 class="section"><span class="secnum">5.6</span>Compaction：当 cache 救不了你</h2>
+
+<p>
+  Cache 优化的是<em>"重复前缀"</em>。但当对话越来越长，前缀本身就要塞不下 context window。
+  这时就要用 compaction：
+</p>
+
+<div class="research-card">
+  <div class="ref-label">前沿引用</div>
+  <div class="ref-title">Effective Context Engineering for AI Agents</div>
+  <div class="ref-meta">Anthropic Engineering · 2025</div>
+  <p>
+    Anthropic 2025 年的 context engineering 文章里把 compaction 称为
+    <em>"the first lever in context engineering to drive better long-term coherence
+    by distilling the contents in a high-fidelity manner."</em>
+  </p>
+</div>
+
+<p>Hermes 的 compaction 机制：</p>
+
+<pre><code><span class="filename">agent/context_compression.py (摘要)</span>
+<span class="k">def</span> <span class="f">compress_context</span>(messages, system_prompt, max_tokens, ...):
+    <span class="s">"""把长 messages 列表压成短消息列表。
+
+    1. 留下最后 N 条消息（最近的，仍然 high-fidelity）。
+    2. 把前面的部分喂给一个 auxiliary LLM（小模型/便宜模型），
+       生成结构化总结。
+    3. 用 [system, &lt;总结消息&gt;, ...最近 N 条] 替换原 messages。
+    """</span>
+    keep_recent = messages[-RECENT_KEEP:]
+    history_to_compress = messages[:-RECENT_KEEP]
+
+    summary = aux_llm.<span class="f">summarize</span>(history_to_compress,
+                                  goal=<span class="s">"preserve facts, decisions, errors"</span>)
+
+    new_messages = [
+        {<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="f">f</span><span class="s">"[Conversation summary: {summary}]"</span>},
+        *keep_recent,
+    ]
+    <span class="k">return</span> new_messages</code></pre>
+
+<p>关键设计选择：</p>
+
+<ul>
+  <li><strong>用便宜模型做 summary</strong>：Hermes 配置一个 auxiliary client，
+      默认是个便宜小模型（如 Claude Haiku、GPT-4o-mini）。压缩本身不该贵。</li>
+  <li><strong>结构化 prompt</strong>：让总结保留事实、决策、错误，丢掉对话客套。</li>
+  <li><strong>留 N 条最近的</strong>：最近的内容仍然原样，让模型不丢"上下文动量"。</li>
+  <li><strong>压缩后开新 session 还是同 session</strong>？Hermes 默认<em>同 session 内替换 messages</em>，
+      但有些场景（cron 任务）用 parent_session_id 链接到新 session。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">5.7</span>Just-In-Time Context（懒加载）</h2>
+
+<p>Anthropic 2025 提的第二招：<em>不要预加载所有数据进 prompt，让 Agent 用工具按需拉取</em>。</p>
+
+<h3>反模式</h3>
+
+<pre><code><span class="c"># BAD: 把整个文件预先塞进 prompt</span>
+system_prompt = <span class="s">"""You are a code reviewer. Here are all the files:
+File 1: src/auth.py
+[完整内容，2000 lines]
+File 2: src/db.py
+[完整内容，3000 lines]
+...
+"""</span></code></pre>
+
+<p>这会让 system prompt 巨大，cache miss 成本巨大，而且模型可能只用其中一两个文件。</p>
+
+<h3>JIT 模式</h3>
+
+<pre><code><span class="c"># GOOD: 只放索引，模型自己决定读哪个</span>
+system_prompt = <span class="s">"""You are a code reviewer. The repo has these files:
+- src/auth.py
+- src/db.py
+- src/api/users.py
+...
+Use the read_file tool to view file contents when needed.
+"""</span></code></pre>
+
+<p>
+  模型用 <code>read_file</code> 工具按需读。这正是 Claude Code、Cursor、Hermes 干的事——
+  它们从不预先 dump 所有代码。
+</p>
+
+<p>对比：</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>预加载</th><th>JIT</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>System prompt 体积</td><td>大（含全部数据）</td><td>小（只含索引）</td></tr>
+    <tr><td>每轮成本</td><td>所有数据都付钱</td><td>只为读到的付钱</td></tr>
+    <tr><td>Cache 命中</td><td>一旦数据变就全破</td><td>system 不变，永远命中</td></tr>
+    <tr><td>模型注意力</td><td>分散在所有数据上</td><td>聚焦于当前需要的</td></tr>
+    <tr><td>开发负担</td><td>需要决定塞什么</td><td>需要写好的工具描述</td></tr>
+  </tbody>
+</table>
+
+<h3>Tool Result Clearing（Anthropic 2025）</h3>
+
+<p>
+  JIT 还有个进阶：模型读完文件用了，<em>清掉旧的 tool result</em>，只留 assistant 的总结。
+  Anthropic 在 2025 年把这做成 Claude API 一级功能：
+</p>
+
+<pre><code><span class="c"># Anthropic API 的 tool_choice 现在支持 clear_tool_results</span>
+client.messages.<span class="f">create</span>(
+    ...
+    tool_choice={<span class="s">"type"</span>: <span class="s">"auto"</span>},
+    clear_tool_results_above=<span class="s">"some_message_id"</span>,   <span class="c"># 清掉旧的</span>
+)</code></pre>
+
+<p>
+  Hermes 还没完全用上这个新 API（写作时是 2026.05），但代码层面有类似机制：
+  压缩时优先丢老的 tool result，保留 assistant 的文本总结。
+</p>
+
+<h2 class="section"><span class="secnum">5.8</span>实战：Skills 的注入策略</h2>
+
+<p>这一节回到具体场景：用户输入 <code>/skills install fortune</code>。怎么做才不破 cache？</p>
+
+<p>方案 A（坏）：把新 skill 加到 system prompt。立刻破整个 cache。</p>
+
+<p>方案 B（好——Hermes 的做法）：</p>
+
+<ol>
+  <li>下载 skill 到 <code>~/.hermes/skills/</code>。</li>
+  <li><em>不</em>修改 system prompt。</li>
+  <li>下次用户输入 <code>/fortune</code> 或者新 session 开始时，自然加载新 skill。</li>
+</ol>
+
+<p>当用户调用 <code>/fortune</code>：</p>
+
+<pre><code><span class="c"># 不是把 SKILL.md 塞进 system prompt</span>
+<span class="c"># 而是作为 user message append 进去</span>
+messages.<span class="f">append</span>({
+    <span class="s">"role"</span>: <span class="s">"user"</span>,
+    <span class="s">"content"</span>: <span class="f">f</span><span class="s">"""[Skill activated: fortune]
+
+{SKILL.md 内容}
+
+请按照这个 skill 的指导回答用户接下来的问题。
+"""</span>
+})</code></pre>
+
+<p>
+  这样 system prompt 和 tools 缓存照样命中。skill 内容作为 user message 也参与缓存——
+  下次同一 skill 被启用，从这条 user message 开始的前缀也能命中（如果消息内容字节级一致）。
+</p>
+
+<div class="callout good">
+  <span class="label">设计金句</span>
+  System prompt 像操作系统镜像，user message 像应用程序。
+  装应用不该重启操作系统。<em>把"上下文相关的能力"放进 user message 而不是 system prompt</em>，
+  是 Hermes 工程的核心智慧。
+</div>
+
+<h2 class="section"><span class="secnum">5.9</span>怎么衡量你的 cache 命中率</h2>
+
+<p>不同 provider 在 response 里都返回缓存统计：</p>
+
+<pre><code><span class="c"># Anthropic 响应中的 usage 字段</span>
+{
+    <span class="s">"usage"</span>: {
+        <span class="s">"input_tokens"</span>: <span class="num">200</span>,                <span class="c"># 本次真正"算"的 input</span>
+        <span class="s">"cache_creation_input_tokens"</span>: <span class="num">0</span>,    <span class="c"># 写 cache 的 input</span>
+        <span class="s">"cache_read_input_tokens"</span>: <span class="num">8000</span>,      <span class="c"># 从 cache 读的 input</span>
+        <span class="s">"output_tokens"</span>: <span class="num">150</span>
+    }
+}</code></pre>
+
+<p>命中率 = cache_read / (cache_read + input_tokens + cache_creation)。
+   理想是 &gt; 90%。如果你看到 &lt; 50%，肯定有某处反复破 cache。</p>
+
+<p>Hermes 提供 <code>/insights</code> 命令查看本 session 的 cache 统计：</p>
+
+<pre><code>$ hermes
+&gt; /insights
+─── Cache Performance ──────────────────────────
+  Read:     12,580 tokens   (cached, $0.013 saved)
+  Write:    1,420 tokens    (this session built cache)
+  Miss:     320 tokens      ← 健康
+  Hit rate: 96%
+─── Cost Breakdown ─────────────────────────────
+  Input:    $0.0042
+  Cached:   $0.0095
+  Output:   $0.0231
+  Total:    $0.0368</code></pre>
+
+<h2 class="section"><span class="secnum">5.10</span>2025–2026 Cache 协议新进展</h2>
+
+<p>2025–2026 各家在 cache 上又出了几个新功能，影响 cache 设计：</p>
+
+<h3>① Anthropic 1-hour Cache TTL（2025 GA）</h3>
+
+<p>
+  原本 Anthropic cache 默认 5 分钟 TTL。2025 年 GA 了<em>1 小时 TTL</em> 选项，
+  写 cache 时按 2 倍价格收费（vs 5 分钟的 1.25 倍），但适合<em>长期不变的大块前缀</em>
+  （比如静态指令、整套工具 schema、AGENTS.md 等）。
+</p>
+
+<p>选 TTL 的简单经济算法：</p>
+
+<ul>
+  <li>同一前缀<em>未来 1 小时被命中 ≥ 2 次</em> → 选 1 小时 TTL 划算。</li>
+  <li>突发短任务 → 5 分钟 TTL 即可。</li>
+</ul>
+
+<p>Hermes 默认 5 分钟。生产部署如果你的 Agent 长期固定 + 流量稳定，改 1 小时省 ~30%。</p>
+
+<h3>② OpenAI Prompt Caching 自动化（2024.10 GA）</h3>
+
+<p>
+  OpenAI 不需要显式标记。它自动检测<em>"前缀重复 ≥ 1024 tokens"</em>就 cache，
+  cache hit 享 50% 折扣。开发者透明——但你仍然要避免"破坏前缀"。
+  和 Anthropic 哲学相同，机制不同。
+</p>
+
+<h3>③ DeepSeek Auto Caching</h3>
+
+<p>
+  DeepSeek 在 2024 年初早早做了 auto caching：缓存 hit 收原价 10%，
+  比 OpenAI 还便宜。配 V4/R2 用，性价比相当强。
+</p>
+
+<h3>④ Tool Result Clearing（Anthropic 2025）</h3>
+
+<p>
+  上一节我们提过 JIT context 和它的关系。具体协议层：
+</p>
+
+<pre><code>client.messages.<span class="f">create</span>(
+    ...
+    cache_control={<span class="s">"type"</span>: <span class="s">"ephemeral"</span>, <span class="s">"ttl"</span>: <span class="s">"1h"</span>},
+    <span class="c"># 2025 新字段：让某个时间点之前的 tool result 清掉</span>
+    clear_tool_results_above=<span class="s">"msg_abc"</span>,
+)</code></pre>
+
+<p>
+  Hermes 还没用上这个新参数（写作时 2026.05），但代码里已经有等价机制——
+  在 Compaction 时优先丢老 tool result、保留 assistant 总结。
+</p>
+
+<h3>⑤ Extended Context Cache（2026 初）</h3>
+
+<p>
+  2026 年初 OpenAI 推 GPT-5 的"context cache"——和 prompt cache 类似但
+  TTL 长达 24 小时、按存储量按时收费。适合<em>"上传一份 10MB 文档让模型反复回答"</em>这种场景。
+  Hermes 内置 memory 系统某种意义上是这个能力的客户端实现。
+</p>
+
+<h3>⑥ 多模态 cache</h3>
+
+<p>
+  2025 起，图片/视频 input 也支持 cache（如 Claude vision 同一张图被多次问）。
+  这对 GUI Agent / vision 类应用极其关键——一张 screenshot 反复分析时不再每次重算。
+</p>
+
+<div class="callout tip">
+  <span class="label">2026 cache 经济学最佳实践</span>
+  ① 长前缀 + 长 TTL —— 1 小时 cache 比 5 分钟划算的临界点是"未来 1 小时内 ≥ 2 次命中"。<br>
+  ② 用 Anthropic 4 个 cache_control breakpoints 优势全占——别只用一个。<br>
+  ③ 跨 session 共用同一份 system prompt + AGENTS.md，让多用户共享 cache。<br>
+  ④ 监控 cache hit rate，目标 &gt; 90%；&lt; 70% 必须查为什么。
+</div>
+
+<h2 class="section"><span class="secnum">5.11</span>本章带走的</h2>
+
+<ul>
+  <li>Prompt cache 是 Agent 经济的命脉。命中 vs 未命中差 5–10 倍成本。</li>
+  <li>所有 cache 命中的条件都是：发送前缀<em>逐字节</em>和上次一致。</li>
+  <li>Hermes 用<strong>三层结构</strong>组织 system prompt：stable / context / volatile，
+      按稳定性从前到后排列，保证 cache 命中边界尽可能靠后。</li>
+  <li>动态内容只<strong>append</strong> 到末尾，永不 insert/edit 中间。</li>
+  <li>Anthropic 用显式 <code>cache_control</code> 标记，其他家自动。Hermes 的标记策略：context 末尾 + tools 末尾。</li>
+  <li>Skills 通过 user message 注入，不污染 system prompt。这是 Hermes 工程最核心的一招。</li>
+  <li>当 context 接近窗口上限时用 <strong>Compaction</strong>（让小模型总结）。</li>
+  <li><strong>JIT context</strong>：放索引、不放全数据，让 Agent 用工具按需拉取。</li>
+  <li>用 <code>/insights</code> 或 provider 的 usage 字段监控 cache 命中率，&gt; 90% 才健康。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      下列哪个动作会破 cache？
+      <ul>
+        <li>(a) 在历史中间删一条消息</li>
+        <li>(b) 在最后追加一条 user message</li>
+        <li>(c) 把当前时间放在 system prompt 第一行</li>
+        <li>(d) 修改第 5 条消息的 1 个标点</li>
+        <li>(e) 添加新工具到 tools 列表</li>
+      </ul>
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 Hermes 三层 prompt 顺序必须是 stable → context → volatile，不能反过来？
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      读 <code>agent/system_prompt.py</code>，列出 stable 层里有哪些条件分支
+      （<code>if "X" in agent.valid_tool_names:</code> 这种）。
+      想清楚：每个 if 是怎样在不同 session 之间影响 cache 行为的？
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      设计一个场景：用户每天早上 9 点都让 Agent 总结他的 RSS。每天的 RSS 内容不同，
+      但 prompt 模板不变。怎么组织 prompt 让 cache 命中最大化？把每天变化的部分放到哪里？
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      把<em>"JIT context"</em>应用到一个具体场景：你要 Agent 在 50,000 行代码库上工作。
+      列出 5 个工具的 schema，让 Agent 不预加载任何代码就能完成任务。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Anthropic 的 5 分钟 vs 1 小时 cache TTL 选择——什么场景选 5 分钟划算，
+      什么场景选 1 小时？写一个决策树。提示：考虑 cache_creation_tokens 在两种 TTL 下的价格。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch04-protocol.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 4 章 · 消息协议与 Tool Calling</div>
+  </a>
+  <a class="next" href="ch06-tools.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 6 章 · Tool Registry 与发现</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 章 · 消息协议与 Tool Calling — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li class="current"><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part II · 核心循环
+  <span class="sep">›</span>
+  第 4 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 04</div>
+  <h1>消息协议与 Tool Calling</h1>
+  <p class="chapter-subtitle">深入 OpenAI 兼容协议的每个字段，看 Hermes 怎么用它跨 30 个不同的
+    Provider 工作——以及怎么处理它们各自的"小怪癖"。</p>
+  <div class="meta">
+    <span>本章约 6,400 字</span>
+    <span>阅读 ~25 分钟</span>
+    <span>关键词：OpenAI Protocol · Function Calling · Reasoning · Provider Quirks</span>
+  </div>
+</div>
+
+<p class="lead">
+  上一章我们看了循环结构。这一章我们看循环里<em>传输的数据格式</em>——messages 数组、
+  tool_calls 结构、reasoning content 字段。这些字段名看起来都是 OpenAI 定的标准，
+  但当 Hermes 同时支持 30 个 provider 时，每家都有自己的小怪癖。这一章讲怎么把"事实标准"
+  落地到代码。
+</p>
+
+<h2 class="section"><span class="secnum">4.1</span>为什么 OpenAI 协议成了事实标准</h2>
+
+<p>
+  2023 年 6 月 OpenAI 加 function calling 字段时，没人想到这会变成业界标准。但发生了。
+  Anthropic、Google、DeepSeek、Moonshot、阿里、字节、Mistral……所有人都做了 OpenAI
+  兼容 endpoint。原因有三个：
+</p>
+
+<ol>
+  <li><strong>市场惯性</strong>：早期所有 SDK 都是写给 OpenAI 的。新 provider 想拿用户，
+      最便宜的路径是"装成 OpenAI"。</li>
+  <li><strong>OpenRouter 等聚合层</strong>：聚合 200 多个模型的服务都用 OpenAI 协议
+      做统一接口。这进一步强化标准。</li>
+  <li><strong>Schema 设计够好</strong>：messages + tools 这种格式简洁、可扩展、
+      可流式。竞争对手挑不出明显缺陷。</li>
+</ol>
+
+<p>结果：Hermes 不用写 30 个 provider 的客户端，它只用 OpenAI Python SDK（<code>openai==2.24.0</code>，
+   exact-pin），把不同 provider 的 <code>base_url</code> 替换成各家的兼容 endpoint 就行。
+   细节差异通过 ProviderProfile 抽象处理（第 12 章）。</p>
+
+<h2 class="section"><span class="secnum">4.2</span>消息四种角色</h2>
+
+<p>OpenAI 协议定义四种 role。每种都有明确语义和字段：</p>
+
+<h3>system — 系统指令</h3>
+
+<pre><code>{
+    <span class="s">"role"</span>: <span class="s">"system"</span>,
+    <span class="s">"content"</span>: <span class="s">"You are Hermes, an AI assistant..."</span>
+}</code></pre>
+
+<p>
+  一个 conversation 通常只有一条 system message，在最开头。它定义 Agent 的身份、
+  风格、可用工具的提示等。这是<em>缓存友好</em>的关键——下章详谈。
+</p>
+
+<h3>user — 用户输入</h3>
+
+<pre><code>{
+    <span class="s">"role"</span>: <span class="s">"user"</span>,
+    <span class="s">"content"</span>: <span class="s">"找一下 Python 3.13 的发布日期"</span>
+}</code></pre>
+
+<p>多模态 user 消息：</p>
+
+<pre><code>{
+    <span class="s">"role"</span>: <span class="s">"user"</span>,
+    <span class="s">"content"</span>: [
+        {<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: <span class="s">"这张图里有什么？"</span>},
+        {<span class="s">"type"</span>: <span class="s">"image_url"</span>, <span class="s">"image_url"</span>: {<span class="s">"url"</span>: <span class="s">"data:image/png;base64,..."</span>}}
+    ]
+}</code></pre>
+
+<p>当 content 是数组时，每个 item 是不同模态的"内容块"。所有支持视觉的 provider 都用这个格式。</p>
+
+<h3>assistant — 模型输出</h3>
+
+<p>最复杂的角色。可能含 content、tool_calls、reasoning。</p>
+
+<pre><code><span class="c"># 纯文本回复</span>
+{<span class="s">"role"</span>: <span class="s">"assistant"</span>, <span class="s">"content"</span>: <span class="s">"Python 3.13 于 2024 年 10 月 7 日发布。"</span>}
+
+<span class="c"># 含 tool_calls</span>
+{
+    <span class="s">"role"</span>: <span class="s">"assistant"</span>,
+    <span class="s">"content"</span>: <span class="s">"我来查一下"</span>,        <span class="c"># content 可以并存</span>
+    <span class="s">"tool_calls"</span>: [
+        {
+            <span class="s">"id"</span>: <span class="s">"call_abc123"</span>,
+            <span class="s">"type"</span>: <span class="s">"function"</span>,
+            <span class="s">"function"</span>: {
+                <span class="s">"name"</span>: <span class="s">"web_search"</span>,
+                <span class="s">"arguments"</span>: <span class="s">'{"query": "Python 3.13 release"}'</span>
+            }
+        }
+    ]
+}
+
+<span class="c"># 含 reasoning（Anthropic Extended Thinking / DeepSeek R1）</span>
+{
+    <span class="s">"role"</span>: <span class="s">"assistant"</span>,
+    <span class="s">"content"</span>: <span class="s">"Python 3.13 于 2024 年 10 月 7 日发布。"</span>,
+    <span class="s">"reasoning_content"</span>: <span class="s">"用户问的是 Python 版本发布日期..."</span>
+}</code></pre>
+
+<h3>tool — 工具结果</h3>
+
+<pre><code>{
+    <span class="s">"role"</span>: <span class="s">"tool"</span>,
+    <span class="s">"tool_call_id"</span>: <span class="s">"call_abc123"</span>,    <span class="c"># 必须和 assistant.tool_calls[i].id 一致</span>
+    <span class="s">"content"</span>: <span class="s">"Search results: Python 3.13 released on Oct 7 2024..."</span>
+}</code></pre>
+
+<div class="callout warn">
+  <span class="label">关键不变量</span>
+  对每一个 assistant.tool_calls[i]，<strong>必须</strong>有一条对应的 tool 消息（用 id 匹配）。
+  这是协议要求。Hermes 在打断时不杀工具进程，就是为了保证这条不变量。
+  破了协议会直接 HTTP 400。
+</div>
+
+<h2 class="section"><span class="secnum">4.3</span>一个完整 turn 的消息演化</h2>
+
+<p>用户问"找 Python 3.13 发布日期"，整轮消息列表的演化：</p>
+
+<pre><code><span class="c"># Turn 开始</span>
+messages = [
+    {<span class="s">"role"</span>: <span class="s">"system"</span>, <span class="s">"content"</span>: <span class="s">"You are Hermes..."</span>},
+    {<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"找 Python 3.13 发布日期"</span>},
+]
+
+<span class="c"># 第 1 次 LLM 调用 → 返回 tool_calls</span>
+response_1 = {
+    <span class="s">"role"</span>: <span class="s">"assistant"</span>, <span class="s">"content"</span>: <span class="k">None</span>,
+    <span class="s">"tool_calls"</span>: [{<span class="s">"id"</span>: <span class="s">"c1"</span>, <span class="s">"function"</span>: {
+        <span class="s">"name"</span>: <span class="s">"web_search"</span>, <span class="s">"arguments"</span>: <span class="s">'{"q":"Python 3.13 release"}'</span>}}]
+}
+messages.<span class="f">append</span>(response_1)
+
+<span class="c"># 执行 web_search，得到结果</span>
+messages.<span class="f">append</span>({
+    <span class="s">"role"</span>: <span class="s">"tool"</span>, <span class="s">"tool_call_id"</span>: <span class="s">"c1"</span>,
+    <span class="s">"content"</span>: <span class="s">"Python 3.13 released on October 7, 2024..."</span>
+})
+
+<span class="c"># 第 2 次 LLM 调用 → 返回最终文本</span>
+response_2 = {
+    <span class="s">"role"</span>: <span class="s">"assistant"</span>,
+    <span class="s">"content"</span>: <span class="s">"Python 3.13 于 2024 年 10 月 7 日发布。"</span>
+}
+messages.<span class="f">append</span>(response_2)
+
+<span class="c"># Turn 结束</span></code></pre>
+
+<p>注意：</p>
+
+<ul>
+  <li>messages 是<em>累积</em>的，不是替换。Turn 之间也保留（除非压缩）。</li>
+  <li>第 1 次 LLM 调用的 content 可以为 <code>null</code>（只有 tool_calls）。</li>
+  <li>第 2 次 LLM 调用前，messages 末尾必须是 tool。否则协议错。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">4.4</span>tool_calls 的 schema 详解</h2>
+
+<p>
+  当 LLM 决定调工具时，<code>response.choices[0].message.tool_calls</code>
+  是数组。每个元素：
+</p>
+
+<pre><code>{
+    <span class="s">"id"</span>: <span class="s">"call_abc123"</span>,         <span class="c"># 唯一 id，提供方生成</span>
+    <span class="s">"type"</span>: <span class="s">"function"</span>,           <span class="c"># 目前只有这一种</span>
+    <span class="s">"function"</span>: {
+        <span class="s">"name"</span>: <span class="s">"web_search"</span>,
+        <span class="s">"arguments"</span>: <span class="s">'{"query": "..."}'</span>  <span class="c"># JSON 字符串！不是对象</span>
+    }
+}</code></pre>
+
+<p>一个反直觉的点：<code>arguments</code> 是<em>JSON 字符串</em>，不是 JSON 对象。
+   为什么？因为流式输出时，对象不能流式发——你不知道什么时候 <code>}</code>。但字符串可以一段段发。
+   这就是为什么 Hermes 要 <code>json.loads(tc.function.arguments)</code> 解析。</p>
+
+<h3>tool schemas (送给 LLM 的)</h3>
+
+<p>这是 Agent → LLM 方向的字段。在 API call 参数 <code>tools</code> 里：</p>
+
+<pre><code>tools = [{
+    <span class="s">"type"</span>: <span class="s">"function"</span>,
+    <span class="s">"function"</span>: {
+        <span class="s">"name"</span>: <span class="s">"web_search"</span>,
+        <span class="s">"description"</span>: <span class="s">"Search the web. Returns top 5 results."</span>,
+        <span class="s">"parameters"</span>: {
+            <span class="s">"type"</span>: <span class="s">"object"</span>,
+            <span class="s">"properties"</span>: {
+                <span class="s">"query"</span>: {
+                    <span class="s">"type"</span>: <span class="s">"string"</span>,
+                    <span class="s">"description"</span>: <span class="s">"Search query"</span>
+                },
+                <span class="s">"max_results"</span>: {
+                    <span class="s">"type"</span>: <span class="s">"integer"</span>,
+                    <span class="s">"default"</span>: <span class="num">5</span>
+                }
+            },
+            <span class="s">"required"</span>: [<span class="s">"query"</span>]
+        }
+    }
+}]</code></pre>
+
+<p>
+  <code>parameters</code> 是标准 JSON Schema。模型读这个 schema 决定怎么调。
+  description 极其关键——它是 LLM 选用哪个工具的唯一指南。第 6 章会详谈怎么写
+  好的 schema description。
+</p>
+
+<h2 class="section"><span class="secnum">4.5</span>Reasoning Content 的多家差异</h2>
+
+<p>
+  2024 年 9 月 OpenAI o1 发布，让 reasoning 第一次成为 API 一等公民——
+  模型先在内部"想"很多，再输出最终答案。从此 reasoning content 成了协议字段。
+  问题是：<strong>每家 provider 字段名不一样</strong>。
+</p>
+
+<table>
+  <thead>
+    <tr><th>Provider</th><th>Reasoning 字段</th><th>特殊行为</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>OpenAI (o1/o3)</td>
+      <td>不暴露（在 API 内部消耗 tokens）</td>
+      <td>计费但不返回，不需要 echo back</td>
+    </tr>
+    <tr>
+      <td>Anthropic (Claude 3.7+)</td>
+      <td><code>reasoning_content</code> + <code>thinking</code> blocks</td>
+      <td>必须按原样 echo back 否则 400</td>
+    </tr>
+    <tr>
+      <td>DeepSeek (R1, V4+)</td>
+      <td><code>reasoning_content</code></td>
+      <td>V4+ 默认 thinking on，会要求 echo</td>
+    </tr>
+    <tr>
+      <td>Qwen Thinking</td>
+      <td>inline <code>&lt;think&gt;...&lt;/think&gt;</code> in content</td>
+      <td>需要从 content 里 strip</td>
+    </tr>
+    <tr>
+      <td>OpenRouter / Mixed</td>
+      <td><code>reasoning_details</code> 数组</td>
+      <td>OpenRouter 包了一层统一格式</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Hermes 的统一处理</h3>
+
+<p>在 conversation_loop.py 第 2283–2334 行，Hermes 把所有 provider 的 reasoning 规范化到一个内部表示：</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:2283-2334 (摘要)</span>
+<span class="c"># 检测 reasoning 字段（多种格式）</span>
+reasoning = (
+    msg.<span class="f">get</span>(<span class="s">"reasoning_content"</span>) <span class="k">or</span>
+    msg.<span class="f">get</span>(<span class="s">"reasoning"</span>) <span class="k">or</span>
+    <span class="s">""</span>
+)
+
+<span class="c"># Qwen 风格的内联 think block</span>
+content = msg.<span class="f">get</span>(<span class="s">"content"</span>) <span class="k">or</span> <span class="s">""</span>
+think_match = <span class="f">re.search</span>(<span class="s">r"&lt;think&gt;(.*?)&lt;/think&gt;"</span>, content, re.DOTALL)
+<span class="k">if</span> think_match:
+    inline_reasoning = think_match.<span class="f">group</span>(<span class="num">1</span>).<span class="f">strip</span>()
+    content = <span class="f">re.sub</span>(<span class="s">r"&lt;think&gt;.*?&lt;/think&gt;"</span>, <span class="s">""</span>, content, flags=re.DOTALL)
+    <span class="k">if</span> <span class="k">not</span> reasoning:
+        reasoning = inline_reasoning
+
+<span class="c"># 把 reasoning 存进 assistant message — 下轮 echo back</span>
+<span class="k">if</span> reasoning:
+    msg[<span class="s">"reasoning_content"</span>] = reasoning</code></pre>
+
+<h3>为什么有些 provider 要 echo back</h3>
+
+<p>
+  Anthropic 和 DeepSeek 设计 reasoning 时，把它当作<em>"模型的内部状态"</em>。
+  下一轮调用时，如果不把上次的 reasoning 原样回传，模型相当于"忘记了自己想过什么"，
+  推理质量下降。所以协议要求 echo。
+</p>
+
+<p>但 Hermes 处理 reasoning 还有一个陷阱——空 reasoning 消息：</p>
+
+<pre><code><span class="c"># 危险消息：只有 reasoning，没 content，也没 tool_calls</span>
+{
+    <span class="s">"role"</span>: <span class="s">"assistant"</span>,
+    <span class="s">"reasoning_content"</span>: <span class="s">"我在想..."</span>,
+    <span class="s">"content"</span>: <span class="k">None</span>,
+    <span class="s">"tool_calls"</span>: <span class="k">None</span>
+}</code></pre>
+
+<p>
+  某些 provider（如 DeepSeek-Reasoner）流式中途可能产出这种"纯思考"消息。
+  其他 provider 看到这种消息会拒绝——它们要求 assistant 必须有 content 或 tool_calls。
+  Hermes 检测后<em>把这种消息直接丢掉</em>，不入历史。
+</p>
+
+<div class="callout">
+  <span class="label">设计选择</span>
+  Hermes 选择"丢掉"而不是"补 content"。补 content 等于伪造模型输出，污染历史。
+  丢掉只损失下一轮的 reasoning 连续性——但比污染历史好得多。
+</div>
+
+<h2 class="section"><span class="secnum">4.6</span>Provider Quirks：四个真实案例</h2>
+
+<p>
+  即使大家都"OpenAI 兼容"，行为细节还是不一样。这里挑四个 Hermes 实际处理过的 quirk。
+</p>
+
+<h3>Quirk 1：DeepSeek V4+ 的 thinking flag</h3>
+
+<p>看 <code>plugins/model-providers/deepseek/__init__.py</code>：</p>
+
+<pre><code><span class="filename">plugins/model-providers/deepseek/__init__.py</span>
+<span class="k">class</span> <span class="n">DeepSeekProfile</span>(<span class="n">ProviderProfile</span>):
+    <span class="k">def</span> <span class="f">build_api_kwargs_extras</span>(self, *, model=<span class="k">None</span>, **ctx):
+        body = {}
+        <span class="k">if</span> <span class="f">_model_supports_thinking</span>(model):
+            <span class="c"># DeepSeek V4 默认 thinking on，会返回 reasoning_content。</span>
+            <span class="c"># 不传 extra_body.thinking 会触发"thinking content must echo back"错误。</span>
+            <span class="c"># 显式传一下消除歧义。</span>
+            body[<span class="s">"extra_body"</span>] = {<span class="s">"thinking"</span>: {<span class="s">"type"</span>: <span class="s">"enabled"</span>}}
+        <span class="k">return</span> body</code></pre>
+
+<p>关键注释（写在源码里）：</p>
+
+<blockquote>
+  DeepSeek's V4 family defaults to thinking-mode ON when extra_body.thinking
+  is unset. The API then returns reasoning_content and starts enforcing the
+  contract that subsequent turns echo it back; combined with how Hermes
+  replays history this lands on HTTP 400 reasoning_content must be passed
+  back error.
+  <footer>plugins/model-providers/deepseek/__init__.py 注释</footer>
+</blockquote>
+
+<p>读这条注释胜过任何文档——它是真实踩坑后写下的 lesson learned。</p>
+
+<h3>Quirk 2：某些 provider 拒绝重复 tool name</h3>
+
+<p>
+  DeepSeek、Xiaomi MiMo、Kimi 这些 provider 对 tools 参数有严格 unique 检查——
+  如果 tools 列表里两个 tool 同名（哪怕来自不同 namespace），直接 HTTP 400。
+</p>
+
+<p>问题来源：Hermes 在长会话里会缓存 tool definitions。如果 cache 里残留了一份
+   被覆盖的旧 schema 加新 schema，发送时就会出现重名。Hermes 的对策：</p>
+
+<pre><code><span class="c"># model_tools.py 的注释（issue #17335）</span>
+<span class="c"># Cache the freshly-computed list, but hand callers a shallow copy so</span>
+<span class="c"># downstream mutations (e.g. run_agent appending memory/LCM tool</span>
+<span class="c"># schemas to self.tools) don't poison the cache. Without this, a</span>
+<span class="c"># long-lived Gateway process accumulates duplicate tool names across</span>
+<span class="c"># agent inits and providers that enforce unique tool names</span>
+<span class="c"># (DeepSeek, Xiaomi MiMo, Moonshot Kimi) reject the request with</span>
+<span class="c"># HTTP 400. Mirrors the cache-hit path above. (issue #17335)</span></code></pre>
+
+<p>解法是"返回 shallow copy"——cache 内部的 list 不被外部修改污染。一个看似无聊的细节，
+   背后是一次真实 outage 的修复。</p>
+
+<h3>Quirk 3：Codex Responses API（OpenAI 的新协议）</h3>
+
+<p>
+  2024 年 OpenAI 推出 Responses API（取代 Assistants API）。它的字段名和经典
+  Chat Completions 不同：用 <code>input</code> 而非 <code>messages</code>，
+  <code>output</code> 而非 <code>choices</code>。OpenAI 推荐 GPT-4.1+ 用 Responses API。
+</p>
+
+<p>Hermes 通过 <code>api_mode</code> 参数支持两种协议：</p>
+
+<pre><code><span class="k">if</span> agent.api_mode == <span class="s">"chat_completions"</span>:
+    response = client.chat.completions.<span class="f">create</span>(...)
+<span class="k">elif</span> agent.api_mode == <span class="s">"codex_responses"</span>:
+    response = client.responses.<span class="f">create</span>(...)
+    response = <span class="f">_normalize_codex_response</span>(response)   <span class="c"># 转回经典格式</span></code></pre>
+
+<p>对上层（conversation_loop）<em>完全透明</em>——它永远只看到经典 Chat Completions 格式。
+   Provider profile 负责协议转换。</p>
+
+<h3>Quirk 4：Gemini 的 tool_choice 限制</h3>
+
+<p>
+  Gemini 通过 OpenRouter 暴露的 OpenAI 兼容 endpoint，<em>不支持 <code>tool_choice="required"</code></em>。
+  你必须传 <code>tool_choice="auto"</code> 或者干脆不传。Hermes 在 GeminiProfile
+  里覆盖了这个参数。
+</p>
+
+<p>结论：所有 provider quirks 都通过 ProviderProfile 子类的方法重载处理，
+   主循环代码不需要 if-else 满天飞。第 12 章会详谈这个设计。</p>
+
+<h2 class="section"><span class="secnum">4.7</span>流式输出的协议</h2>
+
+<p>流式 (streaming) 是 SSE (Server-Sent Events) 协议。每个 chunk 是 OpenAI 的 delta 格式：</p>
+
+<pre><code><span class="c"># 第 1 个 chunk</span>
+data: {<span class="s">"choices"</span>:[{<span class="s">"delta"</span>:{<span class="s">"role"</span>:<span class="s">"assistant"</span>}}]}
+
+<span class="c"># 中间 chunks — 增量 content</span>
+data: {<span class="s">"choices"</span>:[{<span class="s">"delta"</span>:{<span class="s">"content"</span>:<span class="s">"Python"</span>}}]}
+data: {<span class="s">"choices"</span>:[{<span class="s">"delta"</span>:{<span class="s">"content"</span>:<span class="s">" 3.13"</span>}}]}
+data: {<span class="s">"choices"</span>:[{<span class="s">"delta"</span>:{<span class="s">"content"</span>:<span class="s">" 于"</span>}}]}
+
+<span class="c"># Tool call 也可以流式（注意 arguments 是字符串拼接）</span>
+data: {<span class="s">"choices"</span>:[{<span class="s">"delta"</span>:{<span class="s">"tool_calls"</span>:[{<span class="s">"index"</span>:<span class="num">0</span>,<span class="s">"id"</span>:<span class="s">"c1"</span>,
+                                              <span class="s">"function"</span>:{<span class="s">"name"</span>:<span class="s">"web_search"</span>}}]}}]}
+data: {<span class="s">"choices"</span>:[{<span class="s">"delta"</span>:{<span class="s">"tool_calls"</span>:[{<span class="s">"index"</span>:<span class="num">0</span>,
+                                              <span class="s">"function"</span>:{<span class="s">"arguments"</span>:<span class="s">'{"q'</span>}}]}}]}
+data: {<span class="s">"choices"</span>:[{<span class="s">"delta"</span>:{<span class="s">"tool_calls"</span>:[{<span class="s">"index"</span>:<span class="num">0</span>,
+                                              <span class="s">"function"</span>:{<span class="s">"arguments"</span>:<span class="s">'":"Py'</span>}}]}}]}
+<span class="c"># ... 最后</span>
+data: {<span class="s">"choices"</span>:[{<span class="s">"finish_reason"</span>:<span class="s">"tool_calls"</span>}]}
+data: [DONE]</code></pre>
+
+<p>客户端的任务：</p>
+
+<ol>
+  <li>累积 content 字符串，每次更新 UI。</li>
+  <li>累积每个 tool_call 的 name + arguments。tool_call 用 <code>index</code> 标识，
+      跨 chunk 拼起来。</li>
+  <li>累积 reasoning_content（如果有）。</li>
+  <li>看到 finish_reason 后，从累积器组装出完整 message 对象。</li>
+</ol>
+
+<p>
+  OpenAI SDK 帮你做了这事。你只需要遍历 <code>response</code>（生成器）：
+</p>
+
+<pre><code>response = client.chat.completions.<span class="f">create</span>(messages=..., stream=<span class="k">True</span>)
+<span class="k">for</span> chunk <span class="k">in</span> response:
+    delta = chunk.choices[<span class="num">0</span>].delta
+    <span class="k">if</span> delta.content:
+        <span class="f">stream_callback</span>(delta.content)
+    <span class="c"># tool_calls 拼接由 SDK 内部处理，结束后从 response.choices[0].message 拿完整版</span></code></pre>
+
+<p>但要做<em>可中断</em>流式，你得手动迭代 chunk + 在每个 chunk 检查 interrupt flag。
+   Hermes 的 <code>_interruptible_streaming_api_call</code> 干的就是这个。</p>
+
+<h2 class="section"><span class="secnum">4.8</span>错误处理与重试</h2>
+
+<p>
+  Provider 不稳定是常态。Rate limit、500、网络抖动、provider 重启……Hermes 用
+  <code>tenacity==9.1.4</code> 库做自动重试：
+</p>
+
+<pre><code><span class="k">from</span> tenacity <span class="k">import</span> <span class="f">retry</span>, <span class="f">stop_after_attempt</span>, <span class="f">wait_exponential</span>
+
+<span class="k">@retry</span>(
+    stop=<span class="f">stop_after_attempt</span>(<span class="num">5</span>),
+    wait=<span class="f">wait_exponential</span>(multiplier=<span class="num">1</span>, min=<span class="num">2</span>, max=<span class="num">60</span>),
+    retry=<span class="f">retry_if_exception_type</span>(<span class="f">_retryable</span>),
+)
+<span class="k">def</span> <span class="f">api_call_with_retry</span>(...):
+    ...</code></pre>
+
+<p>什么算 retryable？</p>
+
+<table>
+  <thead>
+    <tr><th>错误</th><th>HTTP 状态</th><th>Retry？</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Rate limit</td><td>429</td><td>是，指数退避</td></tr>
+    <tr><td>Server error</td><td>500/502/503/504</td><td>是</td></tr>
+    <tr><td>Timeout</td><td>—</td><td>是</td></tr>
+    <tr><td>Bad request (schema)</td><td>400</td><td><strong>否</strong>，retry 还是错</td></tr>
+    <tr><td>Auth</td><td>401/403</td><td>否</td></tr>
+    <tr><td>Model overloaded</td><td>529 (Anthropic)</td><td>是</td></tr>
+  </tbody>
+</table>
+
+<h3>Fallback Model</h3>
+
+<p>
+  即使 retry 也救不了，Hermes 支持<em>fallback model</em>——一个模型挂了自动切到另一个。
+  Agent 构造时接受 <code>fallback_model</code> 参数。当主 model 多次失败时，剩余循环用 fallback。
+</p>
+
+<div class="callout tip">
+  <span class="label">实用建议</span>
+  为生产 Agent 配 fallback 是基本动作。常用组合：主用 Claude Opus（贵但强），
+  fallback 用 Claude Sonnet 或 GPT-4o（稍便宜但稳）。当 Anthropic API
+  整体 outage 时，Hermes 会自动切到非 Anthropic 模型继续。
+</div>
+
+<h2 class="section"><span class="secnum">4.9</span>2025–2026 协议演进</h2>
+
+<p>OpenAI 兼容协议是 2023 年成型的。这两年又有几个值得注意的演进：</p>
+
+<h3>① OpenAI Responses API（替代 Chat Completions）</h3>
+
+<p>
+  2024 年底 OpenAI 推 <em>Responses API</em> 作为 Chat Completions 的继任者。
+  字段换了壳：<code>messages</code> → <code>input</code>，<code>choices</code> → <code>output</code>。
+  Responses API 在<em>语义上</em>是 stateful（OpenAI 服务端保存 conversation thread），
+  但<em>语义上</em>也可以 stateless 用（每次传完整 input）。
+</p>
+
+<p>
+  到 2026 年 5 月：GPT-5 系列默认走 Responses API；Chat Completions 仍保留但被标"deprecated for new features"。
+  Hermes 通过 <code>api_mode = "codex_responses"</code> 支持两种协议，
+  上层 conversation_loop 不感知。详见第 12 章 CodexProfile。
+</p>
+
+<h3>② Interleaved Thinking（Anthropic 2025+）</h3>
+
+<p>
+  Anthropic 在 2025 年中给 Claude 加了 <em>interleaved thinking</em>：
+  reasoning content 可以<em>穿插</em>在 tool_calls 之间，不必先全想完再调工具。
+  例如：
+</p>
+
+<pre><code>thinking: <span class="s">"我要先看 README..."</span>
+tool_call: read_file(README.md)
+[结果回到模型]
+thinking: <span class="s">"啊 OK，看来要改 main.py"</span>
+tool_call: read_file(main.py)
+...</code></pre>
+
+<p>
+  这让 reasoning 更"贴近 action"，但对 client 实现增加了挑战——
+  你的 streaming 处理逻辑必须能正确分流：把 thinking 部分显示成"思考"，
+  tool_call 显示成"工具调用"，最终 content 显示成"答复"。
+  Hermes 的 reasoning content 处理（第 4.5 节）已经 handle 这种 interleaved 格式。
+</p>
+
+<h3>③ Tool Result Clearing（2025 Anthropic API 新功能）</h3>
+
+<p>
+  之前 tool result 一直占 context window 不放。Anthropic 2025 给 API 加了
+  <code>clear_tool_results_above</code> 字段——你可以告诉它"id=msg_abc 之前的所有 tool result
+  请丢掉，留 assistant 总结"。这是 Anthropic Context Engineering 三招之一（第 13 章详谈）。
+</p>
+
+<h3>④ Multi-modal 工具调用结果</h3>
+
+<p>
+  2025 起 OpenAI/Anthropic 都允许工具结果<em>不只是文本</em>——可以返回图片、PDF、音频。
+  典型场景：<code>web_extract</code> 工具返回的不是网页文本，而是<em>screenshot 截图</em>，
+  让 vision-capable model 直接"看"。Hermes 的 vision_analyze、browser_snapshot 工具
+  就走这条路径。
+</p>
+
+<h3>⑤ Computer Use 工具的标准化</h3>
+
+<p>
+  Anthropic 2024.10 发的 Computer Use 工具 schema（<code>action: screenshot | click | type | scroll</code>）
+  到 2026 已经被 OpenAI Operator、Google Mariner 沿用，事实成标准。Hermes 的
+  <code>computer_use</code> 工具用同一 schema，可在 Claude / GPT-5 vision 两边切换。
+</p>
+
+<h2 class="section"><span class="secnum">4.10</span>本章带走的</h2>
+
+<ul>
+  <li><strong>OpenAI Chat Completions 协议是事实标准</strong>。Hermes 不写专属 client，
+      而是把所有 provider 抽象为"OpenAI 兼容 endpoint"。</li>
+  <li><strong>四种 message role</strong> 的字段和约束必须背熟：
+      system / user / assistant (可带 tool_calls/reasoning) / tool (必须配 tool_call_id)。</li>
+  <li><strong>tool_calls 里 arguments 是字符串</strong>，不是对象。原因是流式拼接。</li>
+  <li><strong>Reasoning content 多家格式不一</strong>。Hermes 在中间层统一规范化。</li>
+  <li><strong>Provider quirks 通过 Profile 子类隔离</strong>，不污染主循环。</li>
+  <li><strong>流式协议是 SSE delta</strong>。可中断流式要手动迭代 chunk 检查 flag。</li>
+  <li><strong>Retry 策略要分类</strong>：429/5xx retry，400/401 不 retry。Fallback model 是生产基本动作。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 <code>tool_calls[i].function.arguments</code> 设计成字符串而不是对象？
+      用 30 字解释。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      列出 messages 列表中哪种结构会违反协议、被 OpenAI/Anthropic 直接拒：
+      <ul>
+        <li>(a) 没有 system message</li>
+        <li>(b) 有 assistant.tool_calls 但下一条不是 tool</li>
+        <li>(c) tool message 的 tool_call_id 在前面找不到匹配</li>
+        <li>(d) 连续两条 user message 中间没 assistant</li>
+        <li>(e) tool 消息出现在第一条</li>
+      </ul>
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      写一段代码，模拟流式 chunk 累积——给定一个 chunk 生成器，输出完整的
+      <code>{content, tool_calls}</code>。考虑 tool_calls 的 index 跨 chunk 拼接。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      读 <code>plugins/model-providers/anthropic/__init__.py</code>（在 Hermes 仓库里）。
+      列出 AnthropicProfile 重载了哪些方法、分别处理什么 quirk。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      DeepSeek R1 的 reasoning_content 在 <em>历史里</em>必须 echo back，
+      但你压缩历史时，应该保留 reasoning_content 吗？为什么？
+      （提示：考虑压缩后下一轮 API 调用谁会读这些消息）
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      设计一个"双 provider 同时跑"的策略：把每个 user message 同时发给 Claude 和 GPT-4，
+      谁先返回用谁，另一个 cancel。讨论：消息历史如何处理（两个 model 看到的历史可能不同）？
+      tool_call_id 如何对齐？
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch03-agent-loop.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 3 章 · run_conversation 解剖</div>
+  </a>
+  <a class="next" href="ch05-prompt-cache.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 5 章 · System Prompt 与缓存经济</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

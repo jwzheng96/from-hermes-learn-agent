@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 11 章 · CLI / Gateway / Profile — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part V · 多面架构
+  <span class="sep">›</span>
+  第 11 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 11</div>
+  <h1>CLI / Gateway / Profile 架构</h1>
+  <p class="chapter-subtitle">一个 Agent 核心，20 个外面世界的出口。Profile 隔离的"导入前"
+    技巧、中心化 Slash Command Registry、Platform Adapter 模式。</p>
+  <div class="meta">
+    <span>本章约 5,700 字</span>
+    <span>阅读 ~25 分钟</span>
+    <span>关键词：profile · COMMAND_REGISTRY · PlatformAdapter · Telegram · Discord</span>
+  </div>
+</div>
+
+<p class="lead">
+  到目前为止我们看的是 Agent 的<em>"里面"</em>——循环、工具、记忆。这一章我们看
+  <em>"外面"</em>——同一个核心怎么同时服务 CLI、Telegram、Discord、Slack、WhatsApp、
+  Signal、Email、Feishu、DingTalk、QQ、Weixin、Mattermost、Matrix、Home Assistant 等。
+  Hermes 一共 20+ 个 platform adapter，全部走同一份核心代码。
+</p>
+
+<h2 class="section"><span class="secnum">11.1</span>三个出口</h2>
+
+<p>Hermes 的部署形态有三大类：</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h4>CLI</h4>
+    <p>本地终端聊天，<code>hermes</code> 命令。最常见的开发者模式。</p>
+  </div>
+  <div class="card">
+    <h4>Gateway</h4>
+    <p>跑在 VPS 上的 daemon。同时连 Telegram bot、Discord bot 等多个平台。用户通过手机消息和 Agent 对话。</p>
+  </div>
+  <div class="card">
+    <h4>ACP</h4>
+    <p>跑在 IDE（VS Code / Zed / JetBrains）里。Agent Communication Protocol。给程序员当 in-editor copilot。</p>
+  </div>
+</div>
+
+<p>它们共用 <code>AIAgent</code> 类。变化的只是<em>"输入怎么进来、输出怎么出去"</em>。</p>
+
+<h2 class="section"><span class="secnum">11.2</span>Profile：多实例隔离</h2>
+
+<p>
+  你想同时有几个 Hermes：一个跑工作（连公司 Slack、用公司 API key），一个跑个人
+  （连个人 Telegram、用个人 API key）。各自独立的 config、memory、sessions、skills。
+  Hermes 的 <em>Profile</em> 机制实现这个：
+</p>
+
+<pre><code>~/.hermes/                  <span class="c"># 默认 profile</span>
+├── config.yaml
+├── .env
+├── sessions.db
+├── skills/
+└── ...
+
+~/.hermes/profiles/
+├── work/
+│   ├── config.yaml         <span class="c"># 工作用配置</span>
+│   ├── .env
+│   ├── sessions.db
+│   ├── skills/
+│   └── ...
+└── personal/
+    ├── config.yaml
+    └── ...
+
+<span class="c"># 用法</span>
+hermes                      <span class="c"># 默认 profile</span>
+hermes -p work              <span class="c"># 切到 work profile</span>
+hermes --profile personal   <span class="c"># 切到 personal profile</span></code></pre>
+
+<h3>实现：HERMES_HOME 环境变量</h3>
+
+<p>
+  整个 Hermes 代码里所有"用户数据路径"都来自 <code>get_hermes_home()</code>，
+  它读环境变量 <code>HERMES_HOME</code>。默认 <code>~/.hermes</code>，profile 时改为 <code>~/.hermes/profiles/work</code>。
+</p>
+
+<p>但有一个<em>关键陷阱</em>。看 Python 模块顶层：</p>
+
+<pre><code><span class="c"># 假设 hermes_state.py 的顶层有这一行</span>
+SESSION_DB_PATH = <span class="f">get_hermes_home</span>() / <span class="s">"sessions.db"</span></code></pre>
+
+<p>
+  这行在 <code>hermes_state</code> 被 import 时执行一次。结果固定。
+  如果你在 import 之后才改 <code>HERMES_HOME</code>，<code>SESSION_DB_PATH</code> 已经定死指向默认路径。
+  Profile 切换失败。
+</p>
+
+<h3>解法：导入前注入</h3>
+
+<p>看 <code>hermes_cli/main.py</code> 的前 80 行：</p>
+
+<pre><code><span class="filename">hermes_cli/main.py:184-269</span>
+<span class="k">def</span> <span class="f">_apply_profile_override</span>() <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Pre-parse --profile/-p and set HERMES_HOME before module imports."""</span>
+    argv = sys.argv[<span class="num">1</span>:]
+    profile_name = <span class="k">None</span>
+    consume = <span class="num">0</span>
+
+    <span class="c"># 1. 显式 -p / --profile flag</span>
+    <span class="k">for</span> i, arg <span class="k">in</span> <span class="f">enumerate</span>(argv):
+        <span class="k">if</span> arg <span class="k">in</span> {<span class="s">"--profile"</span>, <span class="s">"-p"</span>} <span class="k">and</span> i + <span class="num">1</span> &lt; <span class="f">len</span>(argv):
+            profile_name = argv[i + <span class="num">1</span>]
+            consume = <span class="num">2</span>
+            <span class="k">break</span>
+        <span class="k">elif</span> arg.<span class="f">startswith</span>(<span class="s">"--profile="</span>):
+            profile_name = arg.<span class="f">split</span>(<span class="s">"="</span>, <span class="num">1</span>)[<span class="num">1</span>]
+            consume = <span class="num">1</span>
+            <span class="k">break</span>
+
+    <span class="c"># 2. fallback: ~/.hermes/active_profile 文件</span>
+    <span class="k">if</span> profile_name <span class="k">is</span> <span class="k">None</span>:
+        active_file = Path.<span class="f">home</span>() / <span class="s">".hermes"</span> / <span class="s">"active_profile"</span>
+        <span class="k">if</span> active_file.<span class="f">is_file</span>():
+            profile_name = active_file.<span class="f">read_text</span>(encoding=<span class="s">"utf-8"</span>).<span class="f">strip</span>()
+
+    <span class="c"># 3. 解析并设 env var</span>
+    <span class="k">if</span> profile_name <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+        <span class="k">from</span> hermes_cli.profiles <span class="k">import</span> resolve_profile_env
+        hermes_home = <span class="f">resolve_profile_env</span>(profile_name)
+        os.environ[<span class="s">"HERMES_HOME"</span>] = hermes_home
+
+        <span class="c"># 把 --profile 从 sys.argv 抹掉，免得 argparse 报错</span>
+        <span class="k">if</span> consume &gt; <span class="num">0</span>:
+            <span class="k">for</span> i, arg <span class="k">in</span> <span class="f">enumerate</span>(argv):
+                <span class="k">if</span> arg <span class="k">in</span> {<span class="s">"--profile"</span>, <span class="s">"-p"</span>}:
+                    sys.argv = sys.argv[:i+<span class="num">1</span>] + sys.argv[i+<span class="num">1</span>+consume:]
+                    <span class="k">break</span>
+
+
+<span class="c"># 关键：在所有 hermes import 之前调用</span>
+<span class="f">_apply_profile_override</span>()
+<span class="k">from</span> hermes_cli._parser <span class="k">import</span> ...
+<span class="k">from</span> hermes_constants <span class="k">import</span> ...</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 11.1</span> Profile 隔离的"导入前"注入</div>
+
+<p>这个模式是<em>"配置必须在代码读它之前注入"</em>的解决方案。三步：</p>
+
+<ol>
+  <li>在 import hermes 模块之前，<em>手动 parse argv</em> 找 <code>--profile</code>。</li>
+  <li>设置 <code>HERMES_HOME</code> env var。</li>
+  <li>从 argv 删除 profile 参数（argparse 不认识）。</li>
+</ol>
+
+<div class="callout tip">
+  <span class="label">通用启示</span>
+  任何 Python 项目想做"运行时切换数据目录"——比如多账户工具——
+  必须在 import 之前注入 env var。<em>Python 模块顶层是 frozen-time 的</em>，
+  记住这一点能避免一类隐式 bug。
+</div>
+
+<h2 class="section"><span class="secnum">11.3</span>Profile-Safe 代码规则</h2>
+
+<p>Hermes AGENTS.md 里有六条 profile-safe 规则。所有贡献者都遵守：</p>
+
+<ol>
+  <li>
+    <strong>用 <code>get_hermes_home()</code></strong>，不 hardcode <code>~/.hermes</code>。
+    <pre><code><span class="c"># GOOD</span>
+<span class="k">from</span> hermes_constants <span class="k">import</span> get_hermes_home
+config_path = <span class="f">get_hermes_home</span>() / <span class="s">"config.yaml"</span>
+
+<span class="c"># BAD — 破 profile</span>
+config_path = Path.<span class="f">home</span>() / <span class="s">".hermes"</span> / <span class="s">"config.yaml"</span></code></pre>
+  </li>
+  <li>
+    <strong>用户消息用 <code>display_hermes_home()</code></strong>。
+    <pre><code><span class="c"># GOOD</span>
+<span class="f">print</span>(<span class="f">f</span><span class="s">"Saved to {display_hermes_home()}/config.yaml"</span>)
+<span class="c"># 输出 ~/.hermes/config.yaml 或 ~/.hermes/profiles/work/config.yaml</span></code></pre>
+  </li>
+  <li>
+    <strong>模块级常量也用 <code>get_hermes_home()</code></strong>——
+    它在 import 时调用，<em>但</em> <code>_apply_profile_override()</code> 在更早执行。
+  </li>
+  <li>
+    <strong>测试要同时 mock <code>Path.home()</code> 和 <code>HERMES_HOME</code></strong>。
+    <pre><code><span class="k">with</span> patch.<span class="f">object</span>(Path, <span class="s">"home"</span>, return_value=tmp_path), \
+     patch.<span class="f">dict</span>(os.environ, {<span class="s">"HERMES_HOME"</span>: <span class="f">str</span>(tmp_path / <span class="s">".hermes"</span>)}):
+    ...</code></pre>
+  </li>
+  <li>
+    <strong>Platform adapter 用 token lock</strong>。如果两个 profile 都用同一个 Telegram bot token
+    连上 Telegram，会冲突。通过 <code>acquire_scoped_lock()</code> 锁。
+  </li>
+  <li>
+    <strong>Profile 列表操作 anchor 在 <code>~/.hermes/profiles/</code></strong>，
+    不是 <code>get_hermes_home() / "profiles"</code>。这让 <code>hermes -p coder profile list</code>
+    能看到所有 profile，不只是当前那个。
+  </li>
+</ol>
+
+<h2 class="section"><span class="secnum">11.4</span>Slash Command Registry：单一来源</h2>
+
+<p>
+  Hermes 有 CLI、Telegram、Discord、Slack 多个界面，每个都支持 slash 命令
+  （<code>/new</code>、<code>/model</code>、<code>/tools</code>...）。如果每个界面各自定义命令，
+  开发噩梦——加一个命令要改 5 个地方。
+</p>
+
+<p>Hermes 的解法：<em>所有 slash 命令在一个文件里定义</em>。
+   <code>hermes_cli/commands.py</code>:</p>
+
+<pre><code><span class="filename">hermes_cli/commands.py:45-120</span>
+<span class="k">@dataclass</span>(frozen=<span class="k">True</span>)
+<span class="k">class</span> <span class="n">CommandDef</span>:
+    <span class="s">"""Definition of a single slash command."""</span>
+    name: str                          <span class="c"># "background"</span>
+    description: str                   <span class="c"># human-readable</span>
+    category: str                      <span class="c"># "Session" / "Configuration" / ...</span>
+    aliases: <span class="f">tuple</span>[str, ...] = ()  <span class="c"># ("bg",)</span>
+    args_hint: str = <span class="s">""</span>                <span class="c"># "&lt;prompt&gt;", "[name]"</span>
+    subcommands: <span class="f">tuple</span>[str, ...] = ()  <span class="c"># tab-补全用</span>
+    cli_only: bool = <span class="k">False</span>             <span class="c"># 只在 CLI</span>
+    gateway_only: bool = <span class="k">False</span>         <span class="c"># 只在 gateway</span>
+    gateway_config_gate: str <span class="k">|</span> <span class="k">None</span> = <span class="k">None</span>  <span class="c"># 条件解锁</span>
+
+
+COMMAND_REGISTRY: list[CommandDef] = [
+    <span class="f">CommandDef</span>(<span class="s">"new"</span>, <span class="s">"Start a new session"</span>, <span class="s">"Session"</span>,
+               aliases=(<span class="s">"reset"</span>,)),
+    <span class="f">CommandDef</span>(<span class="s">"topic"</span>, <span class="s">"Telegram DM topic sessions"</span>, <span class="s">"Session"</span>,
+               gateway_only=<span class="k">True</span>, args_hint=<span class="s">"[off|session-id]"</span>),
+    <span class="f">CommandDef</span>(<span class="s">"clear"</span>, <span class="s">"Clear screen and start fresh"</span>, <span class="s">"Session"</span>,
+               cli_only=<span class="k">True</span>),
+    <span class="f">CommandDef</span>(<span class="s">"history"</span>, <span class="s">"Show conversation history"</span>, <span class="s">"Session"</span>,
+               cli_only=<span class="k">True</span>),
+    <span class="f">CommandDef</span>(<span class="s">"model"</span>, <span class="s">"Select provider and model"</span>, <span class="s">"Configuration"</span>,
+               args_hint=<span class="s">"[provider:model]"</span>),
+    <span class="f">CommandDef</span>(<span class="s">"tools"</span>, <span class="s">"Configure tool enablement"</span>, <span class="s">"Configuration"</span>,
+               cli_only=<span class="k">True</span>,
+               subcommands=(<span class="s">"list"</span>, <span class="s">"enable"</span>, <span class="s">"disable"</span>)),
+    <span class="f">CommandDef</span>(<span class="s">"insights"</span>, <span class="s">"Show token usage and cache stats"</span>, <span class="s">"Info"</span>,
+               args_hint=<span class="s">"[--days N]"</span>),
+    <span class="f">CommandDef</span>(<span class="s">"skills"</span>, <span class="s">"List or manage skills"</span>, <span class="s">"Tools &amp; Skills"</span>,
+               subcommands=(<span class="s">"list"</span>, <span class="s">"install"</span>, <span class="s">"create"</span>)),
+    <span class="c"># ... 120+ 条</span>
+]</code></pre>
+
+<h3>所有消费者从这里派生</h3>
+
+<p>这一份列表喂给 6 个消费者：</p>
+
+<table>
+  <thead>
+    <tr><th>消费者</th><th>派生方式</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>CLI <code>process_command()</code></td><td><code>resolve_command()</code> 找 canonical name 后 dispatch</td></tr>
+    <tr><td>CLI 帮助 <code>show_help()</code></td><td>按 <code>category</code> 分组渲染</td></tr>
+    <tr><td>Tab 补全 <code>SlashCommandCompleter</code></td><td>读 flat <code>COMMANDS</code> dict</td></tr>
+    <tr><td>Telegram BotCommand</td><td><code>telegram_bot_commands()</code> 生成 menu</td></tr>
+    <tr><td>Slack subcommand 路由</td><td><code>slack_subcommand_map()</code> 生成 dispatch</td></tr>
+    <tr><td>Gateway runner</td><td><code>GATEWAY_KNOWN_COMMANDS</code> frozenset 用于消息守卫</td></tr>
+  </tbody>
+</table>
+
+<p>加一个新命令？<strong>只改 commands.py 一处</strong>，其他自动跟上。
+   加一个别名？编辑 <code>aliases</code> tuple，一行改完。</p>
+
+<h3>gateway_only / cli_only 的细节</h3>
+
+<p>有些命令只在特定环境有意义：</p>
+
+<ul>
+  <li><code>/clear</code> — 清屏 → 只在 CLI（Telegram 没法清屏）</li>
+  <li><code>/topic</code> — Telegram DM topic 管理 → 只在 gateway</li>
+  <li><code>/insights</code> — 看 token 用量 → 两边都有（但显示方式不同）</li>
+</ul>
+
+<h3>gateway_config_gate：条件解锁</h3>
+
+<p>看 <code>tools</code> 命令——它是 <code>cli_only=True</code>，但又有
+   <code>gateway_config_gate="display.tool_progress_command"</code>。意思：</p>
+
+<ul>
+  <li>默认在 gateway 不可用。</li>
+  <li>用户在 config.yaml 里设 <code>display.tool_progress_command: true</code>，
+      gateway 也解锁这个命令。</li>
+</ul>
+
+<p>这种"feature flag in command"模式让单一注册表也能支持精细 routing。</p>
+
+<h2 class="section"><span class="secnum">11.5</span>CLI 入口与子命令</h2>
+
+<p>看 <code>hermes_cli/main.py:11000</code> 附近的 <code>main()</code>:</p>
+
+<pre><code><span class="k">def</span> <span class="f">main</span>():
+    <span class="k">from</span> hermes_cli._parser <span class="k">import</span> build_top_level_parser
+    parser, subparsers, chat_parser = <span class="f">build_top_level_parser</span>()
+    chat_parser.<span class="f">set_defaults</span>(func=cmd_chat)
+
+    <span class="c"># model 子命令</span>
+    model_parser = subparsers.<span class="f">add_parser</span>(<span class="s">"model"</span>, ...)
+    model_parser.<span class="f">set_defaults</span>(func=cmd_model)
+
+    <span class="c"># tools 子命令</span>
+    tools_parser = subparsers.<span class="f">add_parser</span>(<span class="s">"tools"</span>, ...)
+    tools_parser.<span class="f">set_defaults</span>(func=cmd_tools)
+
+    <span class="c"># cron / gateway / curator / skills / ... 共 20+ 子命令</span>
+    ...
+
+    args = parser.<span class="f">parse_args</span>()
+    args.<span class="f">func</span>(args)</code></pre>
+
+<p>
+  经典 argparse + <code>set_defaults(func=...)</code> 模式。每个 <code>cmd_X</code>
+  函数处理对应 subcommand。
+</p>
+
+<p>注意区分：</p>
+
+<ul>
+  <li><code>hermes model</code> — 命令行子命令（启动时一次性）</li>
+  <li><code>/model</code> — 交互式 slash 命令（已经在对话里）</li>
+</ul>
+
+<p>这俩有时干同一件事（选模型），有时不同（<code>hermes model</code> 不进入聊天，只设置 default）。
+   两边都从 <code>COMMAND_REGISTRY</code> 派生命令信息保证一致。</p>
+
+<h2 class="section"><span class="secnum">11.6</span>Gateway：多平台聚合</h2>
+
+<p>
+  Gateway 是一个长跑的进程，同时连接多个 messaging 平台。架构：
+</p>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph GW["Gateway Process"]
+    direction TB
+    AR["AgentRunner<br/><i>per session</i>"]:::core
+    AR -->|message events| TA["TelegramAdapter"]
+    AR --> DA["DiscordAdapter"]
+    AR --> XA["… 18 more adapters"]
+  end
+  TA -.-> TAPI["Telegram API"]
+  DA -.-> DAPI["Discord WebSocket"]
+  XA -.-> XAPI["Slack / WhatsApp /<br/>Signal / Feishu / ..."]
+  TAPI --> U1["📱 用户 1<br/>手机"]
+  DAPI --> U2["💻 用户 2<br/>桌面"]
+  XAPI --> U3["..."]
+  classDef core fill:#f5ede0,stroke:#8b1538,color:#8b1538,font-weight:bold
+</pre>
+
+<p>Gateway 的精神：<em>每个 user message 进来 → 转成 MessageEvent → routing 到 AgentRunner → AgentRunner 调 AIAgent → 输出回 adapter → 发回去</em>。</p>
+
+<h2 class="section"><span class="secnum">11.7</span>Platform Adapter 模式</h2>
+
+<p>每个平台一个子类。看 <code>gateway/platforms/base.py</code>:</p>
+
+<pre><code><span class="filename">gateway/platforms/base.py:1-100</span>
+<span class="k">class</span> <span class="n">PlatformAdapter</span>(<span class="n">ABC</span>):
+    <span class="s">"""Base platform adapter interface.
+
+    All platform adapters (Telegram, Discord, WhatsApp, ...)
+    inherit and implement these methods.
+    """</span>
+
+    name: str   <span class="c"># "telegram", "discord", ...</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">async</span> <span class="k">def</span> <span class="f">connect</span>(self) <span class="k">-&gt;</span> <span class="k">None</span>:
+        <span class="s">"""Connect to the platform (e.g. login, start polling)."""</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">async</span> <span class="k">def</span> <span class="f">disconnect</span>(self) <span class="k">-&gt;</span> <span class="k">None</span>:
+        <span class="s">"""Clean disconnect (e.g. release locks, close sockets)."""</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">async</span> <span class="k">def</span> <span class="f">send_message</span>(self, message: str, to_user: str,
+                            **kwargs) <span class="k">-&gt;</span> str:
+        <span class="s">"""Send a message; return platform-side message ID."""</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">async</span> <span class="k">def</span> <span class="f">handle_incoming</span>(self, event: MessageEvent) <span class="k">-&gt;</span> <span class="k">None</span>:
+        <span class="s">"""Process incoming platform message."""</span>
+
+    <span class="c"># Pending message queue — incoming during agent busy</span>
+    _pending_messages: deque = <span class="f">field</span>(default_factory=deque)
+    _active_sessions: <span class="f">set</span> = <span class="f">field</span>(default_factory=<span class="f">set</span>)</code></pre>
+
+<h3>具体平台例子：Telegram</h3>
+
+<pre><code><span class="filename">gateway/platforms/telegram.py (节选)</span>
+<span class="k">class</span> <span class="n">TelegramAdapter</span>(<span class="n">PlatformAdapter</span>):
+    name = <span class="s">"telegram"</span>
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">connect</span>(self):
+        token = os.<span class="f">environ</span>[<span class="s">"TELEGRAM_BOT_TOKEN"</span>]
+        <span class="c"># Token lock — 防止两个 profile 抢同一个 bot</span>
+        <span class="k">await</span> <span class="f">acquire_scoped_lock</span>(<span class="s">f</span><span class="s">"telegram_token_{token}"</span>)
+        self.bot = telegram.<span class="f">Bot</span>(token=token)
+        <span class="k">await</span> self.bot.<span class="f">initialize</span>()
+        <span class="c"># 注册到 Telegram 的命令菜单（从 COMMAND_REGISTRY 派生）</span>
+        <span class="k">await</span> self.bot.<span class="f">set_my_commands</span>(<span class="f">telegram_bot_commands</span>())
+        self._polling_task = asyncio.<span class="f">create_task</span>(self.<span class="f">_poll</span>())
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">send_message</span>(self, message, to_user, **kwargs):
+        chat_id = <span class="f">int</span>(to_user)
+        <span class="c"># Telegram 上限 4096 UTF-16 code units</span>
+        truncated = <span class="f">_prefix_within_utf16_limit</span>(message, <span class="num">4096</span>)
+        msg = <span class="k">await</span> self.bot.<span class="f">send_message</span>(
+            chat_id=chat_id,
+            text=truncated,
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        <span class="k">return</span> <span class="f">str</span>(msg.message_id)
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">handle_incoming</span>(self, event):
+        <span class="c"># 路由给 AgentRunner</span>
+        <span class="k">await</span> self.agent_runner.<span class="f">dispatch</span>(event)
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">_poll</span>(self):
+        <span class="k">async</span> <span class="k">for</span> update <span class="k">in</span> self.bot.<span class="f">get_updates</span>(allowed_updates=[...]):
+            <span class="c"># 把 Telegram update 转成 MessageEvent</span>
+            event = <span class="f">_telegram_update_to_event</span>(update)
+            <span class="k">await</span> self.<span class="f">handle_incoming</span>(event)</code></pre>
+
+<p>每个具体 platform 的工作：</p>
+
+<ol>
+  <li>连接平台、认证。</li>
+  <li>注册 bot 命令菜单（如果平台支持）。</li>
+  <li>把平台原生事件翻译成 <code>MessageEvent</code>。</li>
+  <li>发送时把 Agent 输出按平台限制（4096 字节 / 2000 字节 / 不支持 markdown 等）切分/转换。</li>
+  <li>注意 token lock 防多实例抢同一个账户。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">11.8</span>消息守卫：双重队列</h2>
+
+<p>
+  Agent 在跑一个长任务时（在调工具），用户又发来新消息怎么办？
+  Hermes 用<em>两道守卫</em>：
+</p>
+
+<h3>守卫 1：base adapter 的 _pending_messages</h3>
+
+<pre><code><span class="filename">gateway/platforms/base.py (摘要)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="f">handle_incoming</span>(self, event):
+    session_key = event.user_id + <span class="s">":"</span> + event.chat_id
+    <span class="k">if</span> session_key <span class="k">in</span> self._active_sessions:
+        <span class="c"># Agent 正忙 — 排队</span>
+        self._pending_messages.<span class="f">append</span>(event)
+        <span class="k">return</span>
+
+    self._active_sessions.<span class="f">add</span>(session_key)
+    <span class="k">try</span>:
+        <span class="k">await</span> self.agent_runner.<span class="f">dispatch</span>(event)
+    <span class="k">finally</span>:
+        self._active_sessions.<span class="f">remove</span>(session_key)
+        <span class="c"># 处理队列里的下一条</span>
+        <span class="k">if</span> self._pending_messages:
+            <span class="k">await</span> self.<span class="f">handle_incoming</span>(self._pending_messages.<span class="f">popleft</span>())</code></pre>
+
+<h3>守卫 2：gateway runner 拦截控制命令</h3>
+
+<p>有些命令<em>必须</em>在 agent 跑着时也能用：<code>/stop</code>（打断）、<code>/approve</code>（审批）、
+   <code>/queue</code>（看队列）等。这些不能进 pending_messages（agent 不停就永远处理不到）。</p>
+
+<p>所以 gateway runner 在<em>守卫 1 之前</em>还要再检查一次：</p>
+
+<pre><code><span class="filename">gateway/run.py (摘要)</span>
+<span class="k">async</span> <span class="k">def</span> <span class="f">on_message</span>(event):
+    canonical = <span class="f">parse_command_name</span>(event.text)
+    <span class="k">if</span> canonical <span class="k">in</span> CONTROL_COMMANDS:   <span class="c"># stop, approve, queue, status, new</span>
+        <span class="c"># Inline dispatch — 绕过 _pending_messages</span>
+        <span class="k">return</span> <span class="k">await</span> <span class="f">_handle_control</span>(canonical, event)
+
+    <span class="c"># 普通消息走守卫 1</span>
+    <span class="k">await</span> adapter.<span class="f">handle_incoming</span>(event)</code></pre>
+
+<div class="callout warn">
+  <span class="label">陷阱</span>
+  AGENTS.md 警告："Any new command that must reach the runner while the agent is
+  blocked MUST bypass BOTH guards." 加新控制命令时必须更新两个 list：
+  <code>CONTROL_COMMANDS</code> 和 <code>GATEWAY_KNOWN_COMMANDS</code>。
+  忘一个就是死锁 bug。
+</div>
+
+<h2 class="section"><span class="secnum">11.9</span>Session 模型</h2>
+
+<p>每个用户、每个平台、每个 chat 是独立的<em>session</em>。Schema：</p>
+
+<pre><code>session_id = <span class="f">hash</span>(platform + user_id + chat_id + thread_id)</code></pre>
+
+<p>各 session 互不知道：用户 A 在 Telegram 的对话和他在 Discord 的对话用不同 session_id，
+   memory 不共享（除非 user_id 链接起来）。这避免泄漏。</p>
+
+<h3>跨平台用户识别</h3>
+
+<p>
+  但用户也希望"同一个我"在多个平台被识别。Hermes 的方案：<code>user_id</code> 可以手动配置 alias。
+  <code>config.yaml</code>:
+</p>
+
+<pre><code>users:
+  zjw:
+    telegram: <span class="s">"@zhangsan"</span>
+    discord: <span class="s">"zhangsan#1234"</span>
+    email: <span class="s">"zjw@example.com"</span></code></pre>
+
+<p>这样不同平台来的消息可以被关联到同一个 user profile + memory。但 session_id
+   还是分开的——避免在 telegram 里说的 secret 漏到 discord。</p>
+
+<h2 class="section"><span class="secnum">11.10</span>ACP：IDE 集成</h2>
+
+<p>
+  最后一个出口：<em>Agent Communication Protocol</em>。这是 Zed 编辑器在 2024 年开始推的
+  开放协议，让外部 Agent 给 IDE 做 in-editor copilot。
+</p>
+
+<p>Hermes 作为 ACP 后端：</p>
+
+<pre><code>hermes-acp                <span class="c"># 启动 ACP server</span></code></pre>
+
+<p>Zed / VS Code（通过插件）以 stdio JSON-RPC 连接 ACP server。协议消息：</p>
+
+<ul>
+  <li><code>initialize</code></li>
+  <li><code>chat/turn</code> — 用户发消息</li>
+  <li><code>tool/edit_approval</code> — 模型要修改文件，IDE 弹 diff 给用户审批</li>
+  <li><code>session/list</code> / <code>session/resume</code></li>
+</ul>
+
+<p>ACP 相对 MCP（第 7 章）是<em>"外部 Agent 给 IDE 用"</em>，反过来 MCP 是<em>"外部工具给 Agent 用"</em>。
+   方向不同。但都是 Anthropic / Zed 一类标准化推动的产物。</p>
+
+<h2 class="section"><span class="secnum">11.11</span>2025–2026 出现的新界面形态</h2>
+
+<p>
+  本章主要讲 CLI / 聊天平台 / IDE 三种"出口"。2025–2026 这一年还冒出几种新形态，
+  值得短暂扫一眼——你做 Agent 产品时可能要考虑其中之一。
+</p>
+
+<h3>① Cloud Workspace Agent（OpenAI Operator / Anthropic Computer Use / Devin / Manus）</h3>
+
+<p>
+  Agent 不跑在你电脑上，跑在云端一个虚拟桌面里。你在网页打开一个 dashboard 看它操作。
+  典型例子：
+</p>
+
+<ul>
+  <li><strong>OpenAI Operator (2025.01)</strong>：跑在 OpenAI 云端的 Chrome。
+      点击预订机票、买东西。</li>
+  <li><strong>Anthropic Computer Use API (2024.10)</strong>：你自己提供桌面环境，
+      API 提供"看 + 操作"能力。</li>
+  <li><strong>Devin (Cognition)</strong>：云端的工程师沙箱——一个完整的 Linux 桌面 + IDE。</li>
+  <li><strong>Manus (2025.03)</strong>：中国初创公司，类似 Devin 但更通用。</li>
+</ul>
+
+<p>这种形态的<em>界面挑战</em>：</p>
+
+<ul>
+  <li>Agent 跑了一小时，用户怎么<em>"中途插话"</em>？</li>
+  <li>Agent 看到敏感信息（信用卡、密码），怎么打 mask？</li>
+  <li>Agent 卡住时，怎么暴露"它在想什么"给用户看？</li>
+</ul>
+
+<p>Hermes 没做 cloud workspace 形态——但它的 <code>gateway</code> + <code>delegate_task</code>
+   + cron 组合可以模拟一部分（让 Hermes 在 VPS 上跑长任务，从手机发消息控制）。</p>
+
+<h3>② Voice / Realtime Agent</h3>
+
+<p>
+  OpenAI 2024.10 发布 Realtime API（WebSocket + 音频双向流），让 Agent 能<em>"听 + 说"</em>。
+  到 2025–2026 这条线快速演进：
+</p>
+
+<ul>
+  <li>Speech-to-speech（无中间文本，直接音频对音频）</li>
+  <li>低于 300ms 端到端延迟</li>
+  <li>语气、情感、打断都自然</li>
+</ul>
+
+<p>
+  对 Agent 工程的挑战：<em>"工具调用"和"流式音频"怎么并存</em>？模型不能在说话过程中突然停下调工具——
+  得在合适的"语义边界"插入。Hermes 目前用 TTS 工具做"看完文本再合成音频"——
+  和 Realtime API 这种 native 音频流是两种范式。
+</p>
+
+<h3>③ Embedded Agent（在产品里的 Agent）</h3>
+
+<p>
+  不是独立 Agent 产品，而是<em>把 Agent 嵌入现有产品</em>。例：
+</p>
+
+<ul>
+  <li>Notion AI / Linear Asks / Slack AI 等——产品内嵌的"提问 → Agent 回答"。</li>
+  <li>Cursor / Zed / Windsurf——IDE 里的 inline AI。</li>
+  <li>Stripe Agent SDK——金融操作型 Agent。</li>
+</ul>
+
+<p>
+  这种形态特点：Agent <em>不主导界面</em>，是产品的一个 feature。
+  用户对它的期望也变了——快速、专注、不啰嗦。
+</p>
+
+<h3>④ Async Agent（异步 Agent / "Background Agent"）</h3>
+
+<p>
+  2026 年新趋势：Agent 不要求用户等着看它干活，而是<em>后台跑 + 完成后通知</em>。例：
+</p>
+
+<ul>
+  <li>Cursor Background Agents：你提交个任务，几小时后看 PR。</li>
+  <li>Devin：分配 Linear ticket 给 Devin，它自己跑。</li>
+  <li>Hermes cron job：把 Hermes 当后台 Agent，定时跑任务、通过 Telegram 推送结果。</li>
+</ul>
+
+<p>
+  Hermes 的 <code>cronjob</code> 工具和 <code>delegate_task</code>（<code>background=true</code>） 是这个方向的早期实现。
+  本书第 14 章会有相关例子。
+</p>
+
+<h3>对照表</h3>
+
+<table>
+  <thead>
+    <tr><th>形态</th><th>典型产品</th><th>Hermes 对应</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>CLI</td><td>Aider / Hermes CLI</td><td>✓ hermes 命令</td></tr>
+    <tr><td>聊天平台</td><td>Hermes Gateway</td><td>✓ 20+ adapter</td></tr>
+    <tr><td>IDE</td><td>Cursor / Zed / VS Code</td><td>✓ ACP adapter</td></tr>
+    <tr><td>Cloud Workspace</td><td>Operator / Devin / Manus</td><td>✗ 没做</td></tr>
+    <tr><td>Voice Realtime</td><td>OpenAI Realtime / Sesame</td><td>~ 走 TTS 工具不是 native</td></tr>
+    <tr><td>Embedded</td><td>Notion AI / Stripe SDK</td><td>~ 可通过 plugin 实现部分</td></tr>
+    <tr><td>Async Background</td><td>Cursor Background / Devin</td><td>✓ cron + delegate_task</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">11.12</span>本章带走的</h2>
+
+<ul>
+  <li>Hermes 有<strong>三个出口</strong>：CLI、Gateway（20+ 平台）、ACP（IDE）。共用 AIAgent 核心。</li>
+  <li><strong>Profile 隔离</strong>用 <code>HERMES_HOME</code> env var。
+      关键技巧：在 import 之前注入。</li>
+  <li>六条 <strong>profile-safe</strong> 编码规则：永远用 <code>get_hermes_home()</code>，永不 hardcode。</li>
+  <li><strong>Slash Command Registry</strong> 集中在 <code>hermes_cli/commands.py</code>。
+      6 个消费者从这一份派生。加命令改一处。</li>
+  <li><code>cli_only</code> / <code>gateway_only</code> / <code>gateway_config_gate</code> 实现细粒度 routing。</li>
+  <li><strong>PlatformAdapter</strong> 抽象类。每个平台 ~50–200 行子类。</li>
+  <li><strong>双重消息守卫</strong>：base 的 pending queue + gateway runner 的 control command 直通。
+      新加 control 命令要同时改两处。</li>
+  <li>Session 用 <code>(platform, user_id, chat_id)</code> 唯一标识。跨平台用户可手动 alias。</li>
+  <li><strong>ACP</strong> 是 IDE 集成协议，与 MCP 互补（MCP 给 Agent 用工具，ACP 给 IDE 用 Agent）。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 <code>_apply_profile_override()</code> 必须在 import 之前调用？
+      Python 模块顶层有什么"陷阱"导致这个？
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      Hermes 想加一个 <code>/lol</code> 命令——只在 gateway 可用，发一张笑话图。
+      列出需要改的文件和具体改动。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      实现一个最简 PlatformAdapter，连一个"假平台"——就是从 stdin 读消息、stdout 输出。
+      约 80 行 Python。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      "双重消息守卫"防止队列堵塞 control 命令。但 gateway runner 怎么知道哪些是 control？
+      读 <code>hermes_cli/commands.py</code>，找 <code>GATEWAY_KNOWN_COMMANDS</code>，
+      解释它的生成机制。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Profile 隔离有一个边界 case：用户 <code>cd</code> 到某项目，项目里有 <code>.hermes</code> 子目录。
+      Hermes 应不应该自动启用一个 project-local profile？讨论 trade-off
+      （便利 vs. 隔离 vs. 可发现性）。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      跨平台用户识别——同一个用户在 Telegram、Discord、Email 上的 messages 怎么并到一个 memory？
+      读 <code>gateway/session.py</code>（如果你下载了源码），看 user_id 是怎么 normalize 的。
+      然后讨论：anonymizing vs. cross-platform linking 的 trade-off。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch10-curator.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 10 章 · Curator 自我维护</div>
+  </a>
+  <a class="next" href="ch12-providers-plugins.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 12 章 · Provider 与 Plugin 生态</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

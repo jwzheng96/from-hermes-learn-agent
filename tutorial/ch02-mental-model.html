@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 章 · 心智模型 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li class="current"><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part I · 基础
+  <span class="sep">›</span>
+  第 2 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 02</div>
+  <h1>心智模型</h1>
+  <p class="chapter-subtitle">把 ReAct、CoT、Workflow、Agent、Augmented LLM 这一堆术语
+    对齐到一张图。看完你应该能对任何一段"agentic"代码迅速分类。</p>
+  <div class="meta">
+    <span>本章约 5,200 字</span>
+    <span>阅读 ~20 分钟</span>
+    <span>关键词：Augmented LLM · Workflow vs Agent · ReAct</span>
+  </div>
+</div>
+
+<p class="lead">
+  上一章我们扫了 Agent 的历史。但概念太多——你听过 ReAct、CoT、ToT、Reflexion、
+  AutoGPT、LangGraph、orchestrator-workers……到了写代码时还是糊。这一章把所有这些
+  术语对齐到<em>一张可操作的图</em>。读完，你能对任何一段标榜 "agentic" 的代码
+  迅速回答：它本质是什么、属于哪种模式、复杂度有没有用对地方。
+</p>
+
+<h2 class="section"><span class="secnum">2.1</span>最小心智模型：Augmented LLM</h2>
+
+<p>
+  Anthropic 2024 年那篇<em>Building Effective Agents</em>提出了一个干净的底层抽象：
+  <strong>Augmented LLM</strong>。一切复杂 Agent 系统都是它的组合。
+</p>
+
+<pre class="mermaid">
+flowchart LR
+  P["prompt"] --> LLM
+  subgraph LLM["Augmented LLM"]
+    direction LR
+    T["tools"]
+    R["retrieval"]
+    M["memory"]
+  end
+  LLM --> Resp["response"]
+  T -.-> TX["工具调用<br/>改变外部状态"]
+  R -.-> RX["RAG<br/>检索知识"]
+  M -.-> MX["长期记忆<br/>跨调用状态"]
+  classDef enhance fill:#fbfaf6,stroke:#8b1538,color:#8b1538
+  class T,R,M enhance
+</pre>
+
+<p>三件增强：</p>
+
+<ul>
+  <li><strong>Tools</strong> — 函数调用能力。让 LLM 能改变外部状态、读外部数据。</li>
+  <li><strong>Retrieval</strong> — 检索能力。从知识库、文档、向量库拉信息进 context。</li>
+  <li><strong>Memory</strong> — 跨调用持久化状态。包括短期会话记忆和长期跨会话记忆。</li>
+</ul>
+
+<p>
+  这三件单独看都是"工具"，但放在一起，LLM 就从"对话引擎"变成"能完成任务的引擎"。
+  本书后面所有抽象——Agent、Workflow、orchestrator、subagent——都是
+  Augmented LLM 在某种调度方式下的组合。
+</p>
+
+<div class="callout tip">
+  <span class="label">第一原则</span>
+  <em>不要在 augmented LLM 之上添加任何抽象，除非你能说清楚它解决了什么具体问题。</em>
+  这是 Anthropic、Simon Willison、Hermes 维护者反复说的核心原则。
+  大多数"复杂 Agent 框架"的问题是抽象太早、太多、太通用。
+</div>
+
+<h2 class="section"><span class="secnum">2.2</span>Workflow vs Agent：关键分类</h2>
+
+<p>
+  Anthropic 那篇博客最重要的贡献，是把"agentic system"切成两类：
+</p>
+
+<table>
+  <thead>
+    <tr><th>类型</th><th>描述</th><th>例子</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Workflow</strong></td>
+      <td>LLM 和工具被<em>预定义的代码路径</em>编排。开发者决定每一步去哪。</td>
+      <td>"先翻译，再总结，再发邮件" — 步骤固定</td>
+    </tr>
+    <tr>
+      <td><strong>Agent</strong></td>
+      <td>LLM <em>动态决定</em>下一步用什么工具，循环直到任务完成。</td>
+      <td>"帮我把这个 bug 修了" — 步骤未知</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  这个区分至关重要，因为它直接影响你应该写什么代码：
+</p>
+
+<ul>
+  <li><strong>Workflow</strong> 用普通 Python 控制流：if/else、for、try/except。
+      每步调一次 LLM。可预测、便宜、好调试。</li>
+  <li><strong>Agent</strong> 必须有一个 while 循环 + 工具集 + budget 控制。
+      不可预测、贵、难调试，但能处理开放任务。</li>
+</ul>
+
+<h3>5 种 Workflow 模式</h3>
+
+<p>Anthropic 列了 5 种，我们各看一眼，因为 Hermes 内部都用到了。</p>
+
+<h4>① Prompt Chaining（链式提示）</h4>
+
+<p>把任务切成顺序步骤，每步一个 LLM 调用，输出喂下一步。</p>
+
+<pre><code><span class="c"># 伪代码：写博客的 chain</span>
+outline = llm(<span class="s">"给我一个关于 X 的提纲"</span>)
+draft   = llm(<span class="s">f"按这个提纲写："</span> + outline)
+polish  = llm(<span class="s">f"优化这段文字："</span> + draft)</code></pre>
+
+<p>关键：步骤之间是<em>顺序依赖</em>。每步的 prompt 是定死的代码，不是 LLM 自己决定的。</p>
+
+<h4>② Routing（路由）</h4>
+
+<p>用一个 LLM 当分类器，根据输入选下游 chain。比如客服系统：
+   "用户问退款？走退款 chain。问产品？走产品 chain。"</p>
+
+<h4>③ Parallelization（并行化）</h4>
+
+<p>两种子模式：</p>
+<ul>
+  <li><em>Sectioning</em>：把任务切成可并发的部分，分别调 LLM，最后聚合。例：让 LLM 把长文档切 10 段，并行总结，再汇总。</li>
+  <li><em>Voting</em>：同一个问题让多个 LLM 各答一次，取多数。降低单次失误风险。</li>
+</ul>
+
+<h4>④ Orchestrator-Workers（编排者-工人）</h4>
+
+<p>
+  一个"orchestrator" LLM 看任务，<em>动态</em>切成子任务，分给"worker" LLM 执行，
+  最后自己整合结果。和 Sectioning 的区别：子任务列表不是事先写死的，是 orchestrator
+  生成的。Anthropic 自己的代码 Agent 就是这种结构。
+</p>
+
+<div class="callout">
+  <span class="label">Hermes 对应</span>
+  Hermes 的 <code>delegate_task</code> 工具就是 orchestrator-workers 的实现。
+  父 Agent 把任务用 <code>delegate_task(goal=..., context=...)</code> 派给子 Agent，
+  子 Agent 在独立 context 里干完返回结果。子 Agent 还能再派——构成树状结构。
+  细节见第 7 章。
+</div>
+
+<h4>⑤ Evaluator-Optimizer（评估-优化循环）</h4>
+
+<p>
+  一个 LLM 生成，另一个 LLM 评估，把反馈给生成者改进，迭代到达标。
+  代码 Agent 写完代码后跑 lint 是简化版（lint 工具替代了 evaluator LLM）。
+  Voyager 论文里"iterative prompting + 环境反馈"也是这类。
+</p>
+
+<h3>Agent 模式</h3>
+
+<p>
+  Agent 不是某种特定模式，而是<em>"以上 5 种的动态组合 + 循环"</em>。
+  Anthropic 这样描述：
+</p>
+
+<blockquote>
+  "Agents begin their work with either a command from, or interactive
+  discussion with, the human user. Once the task is clear, agents
+  plan and operate independently, potentially returning to the human
+  for further information or judgment."
+  <footer>Anthropic · Building Effective Agents</footer>
+</blockquote>
+
+<p>这就是 Hermes 的形态。一旦你用 <code>hermes</code> 命令开启对话，
+  你不再告诉它每一步该做什么——它自己决定下一步是搜索、读文件、还是问你。</p>
+
+<h2 class="section"><span class="secnum">2.3</span>ReAct 模式与现代 Function Calling</h2>
+
+<p>
+  让我们把第 1 章的 ReAct 重新对齐到 Augmented LLM 框架。
+</p>
+
+<p>
+  ReAct 的本质是<em>给 LLM 显式 reasoning 步骤</em>。它要求 LLM 输出顺序是：
+</p>
+
+<pre><code>Thought:  &lt;为什么我要做这件事&gt;
+Action:   &lt;工具名&gt;[参数]
+Observation: &lt;工具结果&gt;
+Thought:  ...
+</code></pre>
+
+<p>而现代 Function Calling 的输出是：</p>
+
+<pre><code>content:    <span class="s">"我打算搜一下"</span>      <span class="c"># Thought（可选）</span>
+tool_calls: [{name: <span class="s">"search"</span>,       <span class="c"># Action（结构化）</span>
+              arguments: {q: <span class="s">"..."</span>}}]
+</code></pre>
+
+<p>
+  下一轮 messages 里就是：
+</p>
+
+<pre><code>{<span class="s">"role"</span>: <span class="s">"tool"</span>, <span class="s">"tool_call_id"</span>: <span class="s">"..."</span>,
+ <span class="s">"content"</span>: <span class="s">"工具结果"</span>}            <span class="c"># Observation</span>
+</code></pre>
+
+<p>
+  所以"现代 Function Calling"≈ "结构化的 ReAct"。
+  reasoning content 字段（DeepSeek-R1、Claude Extended Thinking）则把 "Thought"
+  也变成了协议一等公民，不再是 content 里的散文。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Evolution Track</div>
+  <div class="ref-title">从 ReAct 到 Reasoning Models</div>
+  <div class="ref-meta">2022–2026</div>
+  <p>
+    一条清晰的演化线：<br>
+    2022 ReAct（手写 prompt 模板分 Thought/Action）<br>
+    → 2023 Function Calling（Action 结构化）<br>
+    → 2024 O1/R1 reasoning（Thought 变成训练好的内化能力）<br>
+    → 2025 Extended Thinking（Thought 长度可配置，作为单独账单项）<br>
+  </p>
+  <p>
+    每一步都是<em>"把更多 burden 从 prompt 移到模型本身"</em>。但循环骨架没变——
+    Hermes 的 conversation_loop 依然是 ReAct 的孙子。
+  </p>
+</div>
+
+<h2 class="section"><span class="secnum">2.4</span>Chain-of-Thought 与 Reasoning Models</h2>
+
+<p>
+  CoT（<em>Chain-of-Thought</em>，Wei et al. 2022）是 Agent 的近亲。
+  本质都是"让 LLM 把思考过程写出来"。但 CoT 是<em>单次调用</em>内的，
+  Agent 是<em>多轮工具调用</em>的。区别在循环：
+</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>CoT</th><th>Agent</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>调用次数</td><td>1 次 LLM</td><td>N 次 LLM + N 次工具</td></tr>
+    <tr><td>外部世界交互</td><td>无</td><td>有</td></tr>
+    <tr><td>失败恢复</td><td>无</td><td>可以重试、调整策略</td></tr>
+    <tr><td>典型场景</td><td>数学题、推理题</td><td>开放任务、需要工具的事情</td></tr>
+  </tbody>
+</table>
+
+<p>
+  2024 年起 OpenAI o1 / DeepSeek R1 / Claude Extended Thinking 让 CoT
+  从 prompt 技巧升级成<em>模型一等公民能力</em>。模型在输出 final answer
+  前会先输出"reasoning"（不计费给用户读到），自己想清楚再说话。
+</p>
+
+<p>对 Agent 工程的影响：</p>
+
+<ul>
+  <li>reasoning content 不能直接喂回去给模型——某些 provider 要求严格 echo back，
+      不行就 echo 错就报错。Hermes 在 conversation_loop 第 2283–2334 行专门处理。</li>
+  <li>reasoning 部分占 token，但<em>不占用户的 context window 心智成本</em>——它在
+      provider 那边被 strip 掉再发给下一轮。</li>
+  <li>reasoning 模型在 SWE-Bench 等长程任务上比"普通对话模型 + Agent"有更高上限。
+      但成本也更高。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">2.5</span>Hermes 是 Workflow 还是 Agent？</h2>
+
+<p>把以上分类应用到 Hermes：</p>
+
+<p>
+  <strong>从最外层看 — Hermes 是 Agent</strong>。用户开启对话后，Hermes 不被
+  脚本路径限制，它自己决定每一步是搜索、读文件、调子 Agent、还是直接回答。
+</p>
+
+<p>
+  <strong>从内部子系统看 — Hermes 大量用 Workflow 模式</strong>：
+</p>
+
+<ul>
+  <li><strong>Curator 是 Routing</strong>：把 skill 按状态路由到不同处理路径。</li>
+  <li><strong>Context Compression 是 Prompt Chaining</strong>：触发条件 → 总结 LLM → 替换历史。</li>
+  <li><strong>Delegate Task 是 Orchestrator-Workers</strong>：父子 Agent 派活。</li>
+  <li><strong>Memory Prefetch 是 Retrieval（augmented LLM 的 R）</strong>：背景检索拼进 volatile prompt 层。</li>
+</ul>
+
+<p>这说明<em>Workflow 和 Agent 不是非此即彼</em>——好的 Agent 系统内部
+   到处嵌套着 Workflow。第 7 章会看到 Hermes 怎么用 plugin hooks 让你也能
+   往任何工具调用边界塞一个小 workflow（如审计日志、内容脱敏）。</p>
+
+<h2 class="section"><span class="secnum">2.6</span>什么时候用 Agent，什么时候用 Workflow</h2>
+
+<p>这是工程师最该问自己的问题。Anthropic 的建议：</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h4>用 Workflow 当...</h4>
+    <ul>
+      <li>任务流程<em>可预测</em>（输入决定输出路径）</li>
+      <li>每步成本敏感</li>
+      <li>需要严格审计 / 合规</li>
+      <li>稳定性优先于灵活性</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>用 Agent 当...</h4>
+    <ul>
+      <li>任务<em>步骤数未知</em>（"修复这个 bug"）</li>
+      <li>需要根据中途结果改变策略</li>
+      <li>开放式探索（research、coding）</li>
+      <li>愿意付出延迟和 token 成本换灵活</li>
+    </ul>
+  </div>
+</div>
+
+<h3>实际指南</h3>
+
+<p>Pragmatic flowchart：</p>
+
+<pre class="mermaid">
+flowchart TD
+  Start(["任务来了"]) --> Q1{"步骤能事先<br/>列出来吗？"}
+  Q1 -->|是| W["Workflow"]
+  Q1 -->|否| Q2{"工具空间小？"}
+  Q2 -->|是| A1["简单 ReAct<br/>+ 少数工具"]
+  Q2 -->|否| A2["完整 Agent<br/>+ 子 Agent"]
+  classDef workflow fill:#e8eff5,stroke:#2c5282,color:#2c5282
+  classDef agent fill:#fbfaf6,stroke:#8b1538,color:#8b1538
+  class W workflow
+  class A1,A2 agent
+</pre>
+
+<p>翻译成具体决策：</p>
+
+<ol>
+  <li>"我要做<em>翻译 + 总结 + 发邮件</em>"——三步固定 → Workflow。三次 LLM 调用就够。</li>
+  <li>"我要做<em>把这个 PR review 一下</em>"——可能要看 5 个文件也可能 50 个 → 简单 Agent 配
+      <code>read_file</code>、<code>grep</code>、<code>diff</code> 工具。</li>
+  <li>"我要做<em>从需求文档生成完整 Web 应用</em>"——开放任务、要写代码、跑测试、修 bug → 完整 Agent
+      + 子 Agent 分工 + iterative refinement。</li>
+</ol>
+
+<div class="callout warn">
+  <span class="label">常见反模式</span>
+  把所有任务都做成 Agent。一个简单的"翻译 + 总结"如果用 Agent，会浪费很多 token 让 LLM
+  "想"它该做什么——而这个流程是确定的，根本不该让它想。
+</div>
+
+<h2 class="section"><span class="secnum">2.7</span>本书的概念地图</h2>
+
+<p>把所有概念组织成一张图。这张图你需要回来查很多次：</p>
+
+<pre class="mermaid">
+flowchart TD
+  Root["LLM-Era Agent"]
+  Root --> Aug["Augmented LLM"]
+  Root --> Ctrl["控制流"]
+  Aug --> T["Tools"]
+  Aug --> R["RAG"]
+  Aug --> M["Memory"]
+  Aug --> Rs["Reasoning"]
+  Ctrl --> W["Workflow"]
+  Ctrl --> Ag["Agent"]
+  W --> W1["Prompt Chaining"]
+  W --> W2["Routing"]
+  W --> W3["Parallelization"]
+  W --> W4["Orchestrator-Workers"]
+  W --> W5["Evaluator-Optimizer"]
+  Ag --> Ag1["ReAct loop"]
+  Ag --> Ag2["Subagent"]
+  Ag --> Ag3["+ 自由组合<br/>上面的 workflow"]
+  classDef root fill:#f5ede0,stroke:#8b1538,color:#8b1538,font-weight:bold
+  classDef branch fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+  classDef agent fill:#fbfaf6,stroke:#8b1538,color:#8b1538
+  classDef workflow fill:#e8eff5,stroke:#2c5282,color:#2c5282
+  class Root root
+  class Aug,Ctrl branch
+  class W,W1,W2,W3,W4,W5 workflow
+  class Ag,Ag1,Ag2,Ag3 agent
+</pre>
+
+<p>Hermes 用代码实现了这张图的几乎所有节点：</p>
+
+<ul>
+  <li><strong>Tools</strong>: 79 个 builtin + MCP server 集成 → 第 6 章</li>
+  <li><strong>RAG / Memory</strong>: memory_provider ABC + FTS5 → 第 9 章</li>
+  <li><strong>Reasoning</strong>: 支持 reasoning content 字段 → 第 4 章</li>
+  <li><strong>ReAct loop</strong>: conversation_loop.py → 第 3 章</li>
+  <li><strong>Subagent</strong>: delegate_task tool → 第 7 章</li>
+  <li><strong>Workflow patterns</strong>: compaction、curator、memory prefetch → 各章节</li>
+</ul>
+
+<p>
+  当你读源码迷路时，问自己：<em>我现在看的是这张图哪一块？</em>——
+  通常能立刻定位。
+</p>
+
+<h2 class="section"><span class="secnum">2.8</span>Multi-Agent 心智模型四象限</h2>
+
+<p>
+  上面讲的是<em>单 Agent</em>。但 2024–2026 年大量项目走向 <em>multi-agent</em>——
+  多个 Agent 协作完成一个任务。不同 framework 选了完全不同的底层抽象。
+  搞清楚抽象差异比学具体 API 重要 100 倍。
+</p>
+
+<h3>四种主流抽象</h3>
+
+<div class="grid-2">
+  <div class="card">
+    <h4>① Graph（图模型）</h4>
+    <p>代表：<strong>LangGraph</strong></p>
+    <p>把工作流建模为<em>有向图</em>：节点=步骤，边=条件转移，状态在节点间流动。
+       支持 checkpoint、回退、并行。适合<em>"工作流复杂、状态明确、需要可恢复"</em>的场景。</p>
+    <p><em>优势</em>：observability 强，生产级。<em>劣势</em>：抽象上手成本高。</p>
+  </div>
+  <div class="card">
+    <h4>② Actor（消息模型）</h4>
+    <p>代表：<strong>AutoGen / AG2 / Microsoft Agent Framework</strong></p>
+    <p>每个 Agent 是<em>独立 actor</em>，互相用消息异步通信。没有中心控制——
+       每个 actor 自己决定何时回应、回应谁。适合<em>"研究型对话、多角色辩论"</em>。</p>
+    <p><em>优势</em>：灵活、自然。<em>劣势</em>：可控性差、易陷死锁。</p>
+  </div>
+  <div class="card">
+    <h4>③ Role + Task（角色模型）</h4>
+    <p>代表：<strong>CrewAI</strong></p>
+    <p>类比公司：定义 <em>Agent</em>（"Research Analyst"）、<em>Task</em>（"撰写报告"）、
+       <em>Process</em>（流程串联）。适合<em>"prototype 快、业务直觉好"</em>。</p>
+    <p><em>优势</em>：上手快。<em>劣势</em>：复杂度上升后失控；生产中常被换成 LangGraph。</p>
+  </div>
+  <div class="card">
+    <h4>④ Handoff（交接模型）</h4>
+    <p>代表：<strong>OpenAI Agents SDK</strong></p>
+    <p><em>Delegation</em> 本身是核心 primitive：Agent A 把控制权"交接"给 Agent B。
+       和 ③ 的区别：handoff 是单向、串行的，不是并行多角色协作。</p>
+    <p><em>优势</em>：模型直觉自然。<em>劣势</em>：仅适合线性流程。</p>
+  </div>
+</div>
+
+<h3>Hermes 在哪</h3>
+
+<p>
+  Hermes 本身是<em>具体 Agent 产品</em>，不属于上面任何 framework。但它<em>内部</em>用了
+  <strong>Handoff 模型</strong>——<code>delegate_task</code> 工具就是父 Agent
+  显式 hand off 给子 Agent。
+</p>
+
+<p>这是 Anthropic 在 <em>Building Effective Agents</em> 里推崇的路线——
+   <em>"不用 framework，用直接代码 + 简单 primitive"</em>。
+   Hermes 没有 <code>StateGraph</code>、没有 <code>ActorRuntime</code>——只有一个
+   while 循环 + 工具字典 + <code>delegate_task</code>。但已经能搭出 orchestrator-workers 模式。</p>
+
+<h3>什么时候上 multi-agent framework</h3>
+
+<table>
+  <thead>
+    <tr><th>需求</th><th>推荐</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>简单线性串联（Agent A → B → C）</td><td>纯代码 / Agents SDK handoff</td></tr>
+    <tr><td>复杂分支 + 状态持久化 + 可恢复</td><td>LangGraph</td></tr>
+    <tr><td>多 Agent 互相辩论 / 协商</td><td>AutoGen / MAF</td></tr>
+    <tr><td>业务逻辑明确的工作流</td><td>CrewAI（prototype）→ LangGraph（生产）</td></tr>
+    <tr><td>你已经在做产品级 Agent</td><td>学 Hermes —— 直接写代码，避免 framework 抽象债</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <span class="label">2026 业界趋势</span>
+  <em>从 framework 信仰回到 first-principles 代码</em>。
+  OpenAI 的 Swarm 已 archive；AutoGen 转入 maintenance；
+  生产部署明显从 framework 迁向定制 harness（Cursor、Devin、Claude Code 都是这条路线）。
+  原因——framework 的抽象在 debug 时遮蔽底层 prompt，bug 难定位。
+</div>
+
+<p>第 13 章我们详细拆这次"framework 大洗牌"的来龙去脉。这里你只需要记住：
+   <em>不同 framework 的底层抽象决定了它能干什么——选 framework = 选哲学</em>。</p>
+
+<h2 class="section"><span class="secnum">2.9</span>本章带走的</h2>
+
+<ul>
+  <li>所有 Agent 系统的底层是 <strong>Augmented LLM</strong> = LLM + Tools + Retrieval + Memory。</li>
+  <li>系统分为 <strong>Workflow</strong>（开发者写代码路径）和 <strong>Agent</strong>（LLM 动态决定路径）。
+      <em>大多数任务 Workflow 就够了</em>。</li>
+  <li>5 种经典 Workflow 模式：Prompt Chaining、Routing、Parallelization、Orchestrator-Workers、Evaluator-Optimizer。
+      Hermes 内部到处嵌着它们。</li>
+  <li>ReAct 是 Agent 的祖宗。今天的 Function Calling 是 ReAct 的结构化升级。Reasoning Models
+      是 CoT 的模型内置化。</li>
+  <li>Hermes 整体是 Agent，但内部由多种 Workflow 子系统编排。</li>
+  <li>这张概念地图（2.7 节）会贯穿本书。你迷路时记得回来对照。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      下列哪些是 Workflow，哪些是 Agent？
+      <ul>
+        <li>(a) 用户上传发票 → OCR → 提取金额 → 写入数据库</li>
+        <li>(b) "帮我把这个 React app 改成 Vue"</li>
+        <li>(c) 把英文邮件翻译成中文，再做 sentiment 分析</li>
+        <li>(d) Claude Code 修一个 issue</li>
+        <li>(e) ChatGPT 回答"水的化学式是什么"</li>
+      </ul>
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      "Augmented LLM" 三件增强中，哪一件对"防止上下文窗口爆炸"最关键？为什么？
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      给一个 Orchestrator-Workers 的实际任务设计。说清楚 orchestrator 怎么切任务、worker 怎么独立工作、
+      怎么聚合结果。不超过 300 字。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      读 Voyager 论文摘要（arXiv:2305.16291）。它属于 Agent 还是 Workflow？
+      把它的三个核心组件（automatic curriculum、skill library、iterative prompting）对应到本章
+      2.7 节的概念地图。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Hermes 的 <code>delegate_task</code> 是 orchestrator-workers，但 Hermes 没有
+      一个"主流程"在那里循环编排——所有的子任务派发都是父 Agent 在自己的 while 循环里
+      通过工具调用完成的。这种"用 Agent 实现 Workflow 模式"和直接写代码实现的 Workflow 相比，
+      有什么 trade-off？想清楚之后再去看第 7 章的 <code>delegate_tool.py</code>。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch01-history.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 1 章 · Agent 的前世今生</div>
+  </a>
+  <a class="next" href="ch03-agent-loop.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 3 章 · run_conversation 解剖</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

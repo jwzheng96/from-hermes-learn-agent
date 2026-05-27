@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 · Curator 自我维护 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li class="current"><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part IV · 学习闭环
+  <span class="sep">›</span>
+  第 10 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 10</div>
+  <h1>Curator：技能库自我维护</h1>
+  <p class="chapter-subtitle">让 Agent 创建的 skill 库不腐烂。状态机、归档策略、
+    auxiliary LLM review——这是 self-improving agent 的"图书管理员"。</p>
+  <div class="meta">
+    <span>本章约 4,800 字</span>
+    <span>阅读 ~15 分钟</span>
+    <span>关键词：lifecycle · auxiliary client · agent-created · pinned · archive</span>
+  </div>
+</div>
+
+<p class="lead">
+  第 8 章我们看到 Agent 能自己创建 skill。问题是——一年下来你的
+  <code>~/.hermes/skills/</code> 可能堆了几百个，大部分不再被用、有些彼此重复、
+  有些有 bug。如果不管，技能库就会<em>腐烂</em>。Curator 是 Hermes 的解法。
+</p>
+
+<h2 class="section"><span class="secnum">10.1</span>问题：技能库会腐烂</h2>
+
+<p>具体腐烂方式：</p>
+
+<ul>
+  <li><strong>过时</strong>：6 个月前为某 API v1 写的 skill，API 已经升级到 v3。</li>
+  <li><strong>重复</strong>：Agent 上周写了 <code>parse-csv-stats</code>，今天又写了
+      <code>csv-quick-summary</code>——几乎一样。</li>
+  <li><strong>从未真正用过</strong>：Agent 一时兴起创建，后来再没启用过。</li>
+  <li><strong>schema 漂移</strong>：skill 里写 <em>"用 vision_analyze 看图"</em>，
+      但 vision_analyze 工具最近改了参数名。</li>
+  <li><strong>注意力稀释</strong>：500 个 skill 让 slash 补全菜单成了垃圾场，
+      LLM 也很难选对的那个。</li>
+</ul>
+
+<p>解决方案：定期 review、归档不活跃的、合并相似的、修破损的。
+   <em>这事让 Agent 自己做</em>——Curator 是这个想法的实现。</p>
+
+<h2 class="section"><span class="secnum">10.2</span>设计原则</h2>
+
+<p>看 <code>agent/curator.py</code> 顶部的文档：</p>
+
+<pre><code><span class="filename">agent/curator.py:1-25</span>
+<span class="s">"""Curator — background skill maintenance orchestrator.
+
+The curator is an auxiliary-model task that periodically reviews
+agent-created skills and maintains the collection. It runs
+inactivity-triggered (no cron daemon): when the agent is idle and
+the last curator run was longer than ``interval_hours`` ago,
+``maybe_run_curator()`` spawns a forked AIAgent to do the review.
+
+Responsibilities:
+  - Auto-transition lifecycle states based on derived skill activity timestamps
+  - Spawn a background review agent that can pin / archive / consolidate /
+    patch agent-created skills via skill_manage
+  - Persist curator state (last_run_at, paused, etc.) in .curator_state
+
+Strict invariants:
+  - Only touches agent-created skills (see tools/skill_usage.is_agent_created)
+  - Never auto-deletes — only archives. Archive is recoverable.
+  - Pinned skills bypass all auto-transitions
+  - Uses the auxiliary client; never touches the main session's prompt cache
+"""</span></code></pre>
+
+<p>四条不变量决定 Curator 的<em>性格</em>：</p>
+
+<ol>
+  <li><strong>只动 agent-created skill</strong>。bundled / user-authored 不碰。
+      （第 8 章讲过 <code>created_by: agent</code> 这条元数据。）</li>
+  <li><strong>从不自动删除</strong>，最重的操作是 archive。可恢复。</li>
+  <li><strong>pinned 跳过所有转换</strong>。用户钉过的就是要留的。</li>
+  <li><strong>用 auxiliary client</strong>——绝不污染主 session 的 prompt cache。</li>
+</ol>
+
+<div class="callout good">
+  <span class="label">谨慎的工程哲学</span>
+  Curator 自己跑，但它<em>从不删除用户数据</em>。最坏后果是某个 skill 被归档到 <code>.archive/</code>
+  目录——还能恢复。这种"自动化但可逆"的设计是<em>可信 AI</em>的关键。
+  对照那些"AI 帮你管理收件箱时直接删邮件"的产品。
+</div>
+
+<h2 class="section"><span class="secnum">10.3</span>三态生命周期</h2>
+
+<p>每个 agent-created skill 有三个状态：</p>
+
+<table>
+  <thead>
+    <tr><th>状态</th><th>含义</th><th>用户感受</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>active</code></td>
+      <td>正常使用，在 slash 补全菜单里</td>
+      <td>正常工作</td>
+    </tr>
+    <tr>
+      <td><code>stale</code></td>
+      <td>太久没用，从补全菜单里隐藏</td>
+      <td>看不到，但 <code>session_search</code> 仍能找到</td>
+    </tr>
+    <tr>
+      <td><code>archived</code></td>
+      <td>移到 <code>.archive/</code>，完全隐藏</td>
+      <td>需要 <code>hermes curator restore</code> 才能恢复</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>加上一个独立的 <code>pinned</code> 布尔，正交于三态：</p>
+
+<pre><code><span class="filename">tools/skill_usage.py:35-45</span>
+STATE_ACTIVE = <span class="s">"active"</span>
+STATE_STALE = <span class="s">"stale"</span>
+STATE_ARCHIVED = <span class="s">"archived"</span>
+_VALID_STATES = {STATE_ACTIVE, STATE_STALE, STATE_ARCHIVED}
+
+<span class="c"># 每个 skill 在 ~/.hermes/skills/.usage.json 里的记录</span>
+<span class="c"># {</span>
+<span class="c">#   "created_at": "...",</span>
+<span class="c">#   "created_by": "agent" | "user",</span>
+<span class="c">#   "last_used_at": "...",</span>
+<span class="c">#   "use_count": 12,</span>
+<span class="c">#   "state": "active" | "stale" | "archived",</span>
+<span class="c">#   "pinned": true | false</span>
+<span class="c"># }</span></code></pre>
+
+<h3>状态转换图</h3>
+
+<pre class="mermaid">
+stateDiagram-v2
+  direction LR
+  [*] --> ACTIVE: skill 创建
+  ACTIVE --> ACTIVE: 被使用
+  ACTIVE --> STALE: 30 天没用
+  STALE --> ACTIVE: 再次使用<br/>(reactivate)
+  STALE --> ARCHIVED: 90 天没用<br/>(移到 .archive/)
+  ARCHIVED --> ACTIVE: hermes curator restore
+  note right of ARCHIVED
+    永不删除
+    可手动恢复
+  end note
+  note left of ACTIVE
+    pinned: true 的 skill
+    跳过所有自动转换
+  end note
+</pre>
+
+<h2 class="section"><span class="secnum">10.4</span>实际的转换代码</h2>
+
+<p>看 <code>agent/curator.py</code> 第 256–296 行：</p>
+
+<pre><code><span class="filename">agent/curator.py:256-296</span>
+<span class="k">def</span> <span class="f">apply_automatic_transitions</span>(now=<span class="k">None</span>) <span class="k">-&gt;</span> Dict[str, int]:
+    <span class="s">"""Walk every agent-created skill and move active/stale/archived
+    based on the latest real activity timestamp. Pinned skills are
+    never touched. Returns a counter dict describing what changed."""</span>
+    <span class="k">from</span> tools <span class="k">import</span> skill_usage <span class="k">as</span> _u
+
+    <span class="k">if</span> now <span class="k">is</span> <span class="k">None</span>:
+        now = datetime.<span class="f">now</span>(timezone.utc)
+    stale_cutoff = now - <span class="f">timedelta</span>(days=<span class="f">get_stale_after_days</span>())
+    archive_cutoff = now - <span class="f">timedelta</span>(days=<span class="f">get_archive_after_days</span>())
+
+    counts = {<span class="s">"marked_stale"</span>: <span class="num">0</span>, <span class="s">"archived"</span>: <span class="num">0</span>,
+              <span class="s">"reactivated"</span>: <span class="num">0</span>, <span class="s">"checked"</span>: <span class="num">0</span>}
+
+    <span class="k">for</span> row <span class="k">in</span> _u.<span class="f">agent_created_report</span>():
+        counts[<span class="s">"checked"</span>] += <span class="num">1</span>
+        name = row[<span class="s">"name"</span>]
+        <span class="k">if</span> row.<span class="f">get</span>(<span class="s">"pinned"</span>):
+            <span class="k">continue</span>
+
+        last_activity = <span class="f">_parse_iso</span>(row.<span class="f">get</span>(<span class="s">"last_activity_at"</span>))
+        <span class="c"># 如果从来没活动过，用 created_at 作为锚</span>
+        anchor = last_activity <span class="k">or</span> <span class="f">_parse_iso</span>(row.<span class="f">get</span>(<span class="s">"created_at"</span>)) <span class="k">or</span> now
+        <span class="k">if</span> anchor.tzinfo <span class="k">is</span> <span class="k">None</span>:
+            anchor = anchor.<span class="f">replace</span>(tzinfo=timezone.utc)
+
+        current = row.<span class="f">get</span>(<span class="s">"state"</span>, _u.STATE_ACTIVE)
+
+        <span class="k">if</span> anchor <span class="k">&lt;=</span> archive_cutoff <span class="k">and</span> current != _u.STATE_ARCHIVED:
+            ok, _msg = _u.<span class="f">archive_skill</span>(name)
+            <span class="k">if</span> ok:
+                counts[<span class="s">"archived"</span>] += <span class="num">1</span>
+        <span class="k">elif</span> anchor <span class="k">&lt;=</span> stale_cutoff <span class="k">and</span> current == _u.STATE_ACTIVE:
+            _u.<span class="f">set_state</span>(name, _u.STATE_STALE)
+            counts[<span class="s">"marked_stale"</span>] += <span class="num">1</span>
+        <span class="k">elif</span> anchor <span class="k">&gt;</span> stale_cutoff <span class="k">and</span> current == _u.STATE_STALE:
+            <span class="c"># 又被用了 — 自动 reactivate</span>
+            _u.<span class="f">set_state</span>(name, _u.STATE_ACTIVE)
+            counts[<span class="s">"reactivated"</span>] += <span class="num">1</span>
+
+    <span class="k">return</span> counts</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 10.1</span> Curator 状态转换的核心逻辑</div>
+
+<p>注意几个细节：</p>
+
+<ul>
+  <li><strong>"如果从来没活动过"</strong>：用 <code>created_at</code> 当锚。这避免新 skill
+      被立即归档（"它创建时还没来得及用，凭啥归档"）。</li>
+  <li><strong>"再次活动了自动 reactivate"</strong>：用户用了一个 stale skill，它自动升级回 active。
+      不要让用户手动改状态。</li>
+  <li><strong>纯纯的状态机</strong>，没有任何"思考"。Curator 这一步是<em>无 LLM</em>的——
+      纯 Python，规则化。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">10.5</span>触发：inactivity-based，不是 cron</h2>
+
+<p>什么时候跑 Curator？Hermes 的答案：<em>"等用户闲下来"</em>。</p>
+
+<pre><code><span class="filename">agent/curator.py (简化)</span>
+<span class="k">def</span> <span class="f">maybe_run_curator</span>() <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Called at session_end / idle detection. Decides whether to run."""</span>
+    state = <span class="f">load_curator_state</span>()
+    cfg = <span class="f">_load_config</span>()
+
+    <span class="k">if</span> <span class="k">not</span> cfg.<span class="f">get</span>(<span class="s">"enabled"</span>, <span class="k">True</span>):
+        <span class="k">return</span>
+    <span class="k">if</span> state.<span class="f">get</span>(<span class="s">"paused"</span>):
+        <span class="k">return</span>
+
+    last_run = <span class="f">_parse_iso</span>(state.<span class="f">get</span>(<span class="s">"last_run_at"</span>))
+    interval_hours = <span class="f">get_interval_hours</span>()         <span class="c"># 默认 168 = 一周</span>
+    min_idle_hours = <span class="f">get_min_idle_hours</span>()         <span class="c"># 默认 2 小时</span>
+
+    <span class="k">if</span> last_run <span class="k">and</span> (now - last_run).<span class="f">total_seconds</span>() &lt; interval_hours * <span class="num">3600</span>:
+        <span class="k">return</span>     <span class="c"># 还没到时间</span>
+
+    last_activity = <span class="f">_get_user_last_activity</span>()
+    <span class="k">if</span> (now - last_activity).<span class="f">total_seconds</span>() &lt; min_idle_hours * <span class="num">3600</span>:
+        <span class="k">return</span>     <span class="c"># 用户最近还在用，别打扰</span>
+
+    <span class="c"># 满足条件 — 跑</span>
+    <span class="f">_run_curator</span>()
+    state[<span class="s">"last_run_at"</span>] = now.<span class="f">isoformat</span>()
+    <span class="f">save_curator_state</span>(state)</code></pre>
+
+<p>关键设计：</p>
+
+<ul>
+  <li><strong>不是 cron 守护进程</strong>。Hermes 不开后台 daemon。
+      Curator 在 session 结束时检查一次。</li>
+  <li><strong>双重门槛</strong>：(a) 距上次 run 超过 <code>interval_hours</code>，
+      (b) 用户至少闲 <code>min_idle_hours</code>。</li>
+  <li><strong>状态持久化</strong>到 <code>~/.hermes/.curator_state</code>。</li>
+  <li><strong>跨 session 等价</strong>：Hermes 一周不开机，下次开机仍然知道"上次 Curator 跑过"。</li>
+</ul>
+
+<div class="callout">
+  <span class="label">为什么不用 cron</span>
+  Cron daemon 会持续占内存、需要安装服务、跨平台麻烦（macOS LaunchAgent vs Linux systemd）。
+  而 Curator 的需求是<em>"偶尔跑一下"</em>。
+  Inactivity-based 触发是<em>"按需启动"</em>的最朴素实现。
+</div>
+
+<h2 class="section"><span class="secnum">10.6</span>Auxiliary LLM Review</h2>
+
+<p>除了无脑状态机，Curator 还会启动一个 review agent 做<em>智能审查</em>。</p>
+
+<p>这个 review agent 是个独立的 AIAgent 实例，用 auxiliary model（便宜小模型，
+   不是主对话用的旗舰），加载这些工具：</p>
+
+<pre><code>review_agent = <span class="f">AIAgent</span>(
+    model=cfg.<span class="f">get</span>(<span class="s">"curator.review_model"</span>, <span class="s">"claude-haiku-4-5"</span>),
+    enabled_toolsets=[<span class="s">"skills"</span>],   <span class="c"># 只能动 skill 相关工具</span>
+    skip_memory=<span class="k">True</span>,                <span class="c"># 不污染主 memory</span>
+    skip_context_files=<span class="k">True</span>,         <span class="c"># 不要 AGENTS.md 等</span>
+    quiet_mode=<span class="k">True</span>,
+    max_iterations=<span class="num">30</span>,
+)</code></pre>
+
+<p>它的 system prompt 大致是：</p>
+
+<pre><code>You are the Hermes Skills Curator. Review the following agent-created skills.
+
+Active skills (last used ≥ 30 days ago, candidate for stale):
+- data-processing-pipeline (last used 35 days ago, use_count: 2)
+- csv-quick-summary       (last used 40 days ago, use_count: 1)
+
+Recently archived (90+ days no use):
+- (none)
+
+Your tasks:
+1. For each candidate, decide:
+   - keep as active (if still useful)
+   - mark stale
+   - merge with similar skill
+   - patch (fix broken references / outdated APIs)
+2. Use skill_view to inspect content before deciding.
+3. Use skill_manage(action=&quot;consolidate&quot;) to merge.
+4. Use skill_manage(action=&quot;patch&quot;) to fix.
+5. Output a brief summary.
+
+Do NOT delete anything. Only archive. Pinned skills are off-limits.</code></pre>
+
+<p>这个 review agent 跑完，输出报告：</p>
+
+<pre><code>Curator Review · 2026-05-23
+─────────────────────────────────────────
+Reviewed 12 skills.
+
+Consolidated:
+- merged 'csv-quick-summary' + 'parse-csv-stats' → 'csv-analyze'
+
+Patched:
+- 'web-deep-research': updated outdated reference to web_search v1 → v2
+
+Marked stale:
+- 'old-mlflow-integration' (last used 67 days ago, low value)
+
+Active: 9 skills remain.</code></pre>
+
+<p>报告写进 <code>~/.hermes/.curator_state</code>，用户可以用 <code>hermes curator status</code> 看。</p>
+
+<h2 class="section"><span class="secnum">10.7</span>backup：每次 review 前快照</h2>
+
+<p>
+  Curator 可能改 / 归档 skill。如果它判断错了怎么办？
+  Hermes 在每次 review 前打一个 tar.gz 快照：
+</p>
+
+<pre><code>~/.hermes/skills/.backups/
+├── 2026-05-16_curator.tar.gz
+├── 2026-05-09_curator.tar.gz
+├── 2026-05-02_curator.tar.gz
+└── ...</code></pre>
+
+<p>每个 backup 是整个 <code>skills/</code> 目录的快照。用户随时可以：</p>
+
+<pre><code>hermes curator rollback <span class="num">2026</span>-<span class="num">05</span>-<span class="num">16</span>
+<span class="c"># 把 skills/ 还原到那个时间点的状态</span></code></pre>
+
+<p>backup 保留策略：默认 4 周。可在 <code>config.yaml</code> 改。</p>
+
+<h2 class="section"><span class="secnum">10.8</span>用户怎么干预</h2>
+
+<p>Hermes 的 <code>hermes curator</code> CLI 给用户完全控制：</p>
+
+<table>
+  <thead>
+    <tr><th>命令</th><th>作用</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>hermes curator status</code></td><td>看上次 run 时间、转换结果</td></tr>
+    <tr><td><code>hermes curator run</code></td><td>立即跑一次（绕过 interval / idle 检查）</td></tr>
+    <tr><td><code>hermes curator pause</code></td><td>暂停自动 review</td></tr>
+    <tr><td><code>hermes curator resume</code></td><td>恢复自动 review</td></tr>
+    <tr><td><code>hermes curator pin &lt;name&gt;</code></td><td>钉住一个 skill，免疫所有转换</td></tr>
+    <tr><td><code>hermes curator unpin &lt;name&gt;</code></td><td>取消钉住</td></tr>
+    <tr><td><code>hermes curator archive &lt;name&gt;</code></td><td>手动归档</td></tr>
+    <tr><td><code>hermes curator restore &lt;name&gt;</code></td><td>恢复归档 skill</td></tr>
+    <tr><td><code>hermes curator prune</code></td><td>清理 90 天前的 archived（用户确认后）</td></tr>
+    <tr><td><code>hermes curator backup</code></td><td>手动打快照</td></tr>
+    <tr><td><code>hermes curator rollback &lt;date&gt;</code></td><td>还原快照</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">10.9</span>配置</h2>
+
+<p><code>~/.hermes/config.yaml</code>:</p>
+
+<pre><code>curator:
+  enabled: true                  <span class="c"># 默认 ON</span>
+  interval_hours: 168            <span class="c"># 一周一次</span>
+  min_idle_hours: 2              <span class="c"># 用户至少闲 2 小时</span>
+  stale_after_days: 30           <span class="c"># 30 天没用变 stale</span>
+  archive_after_days: 90         <span class="c"># 90 天没用归档</span>
+  review_model: claude-haiku-4-5 <span class="c"># review 用的便宜模型</span>
+  backup:
+    enabled: true
+    retain_weeks: 4              <span class="c"># 快照保留 4 周</span></code></pre>
+
+<p>三个数字（30 / 90 / 168）是经验值——Hermes 团队跑了几个月得出的。
+   你可以根据自己使用频率调整。</p>
+
+<h2 class="section"><span class="secnum">10.10</span>横向对照：哪些产品有 Curator 类似机制</h2>
+
+<table>
+  <thead>
+    <tr><th>产品</th><th>类似机制</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Cursor</td>
+      <td>"@codebase" 索引会定期重建，但无 skill 概念</td>
+    </tr>
+    <tr>
+      <td>Claude Code</td>
+      <td>没有 skill 自动归档；CLAUDE.md 完全人工管理</td>
+    </tr>
+    <tr>
+      <td>Voyager</td>
+      <td>skill library 不归档，但 iterative refinement 时会被改写</td>
+    </tr>
+    <tr>
+      <td>Letta (MemGPT)</td>
+      <td>archival memory 有 paging，但无显式 review 工作流</td>
+    </tr>
+    <tr>
+      <td>Hermes</td>
+      <td><strong>完整的"创建 → 使用 → 归档 → 备份 → 恢复"循环</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Hermes 的 Curator 是<em>"长寿 Agent 生态"</em>的一个独特实践。如果你计划让 Agent 运行
+  数月甚至数年，<strong>必须</strong>有这种机制。否则 skill 库迟早爆炸。
+</p>
+
+<h2 class="section"><span class="secnum">10.11</span>Curator 哲学：Pruning Is Caring</h2>
+
+<p>Curator 体现了一个深刻的工程理念：</p>
+
+<blockquote>
+  An agent that only learns but never forgets is a hoarder.
+  Real intelligence requires pruning.
+  <footer>本书作者（对 Hermes 设计的总结）</footer>
+</blockquote>
+
+<p>三个学习闭环组件的协作：</p>
+
+<pre class="mermaid">
+flowchart TB
+  S["Skill<br/><i>创建</i>"]:::pillar
+  M["Memory<br/><i>回忆</i>"]:::pillar
+  C["Curator<br/><i>修剪</i>"]:::pillar
+
+  S --> SA["把新经验写成 SKILL.md"]
+  M --> MA["搜索相关历史<br/>注入 volatile"]
+  C --> CA["定期审查 · 归档 · 合并<br/>防止技能库膨胀腐烂"]
+
+  SA --> Short["短期收益<br/><i>这次任务能用</i>"]:::good
+  MA --> Short
+  SA --> Long["长期健康<br/><i>半年后仍能用</i>"]:::good
+  CA --> Long
+
+  classDef pillar fill:#f5ede0,stroke:#8b1538,color:#8b1538,font-weight:bold
+  classDef good fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+</pre>
+
+<p>
+  没有 Curator，前两件事会让你的 Agent 慢慢被自己的"经验"压垮。
+  这就是为什么 Hermes 这么强调"create + recall + prune"是同一个闭环。
+</p>
+
+<h2 class="section"><span class="secnum">10.12</span>本章带走的</h2>
+
+<ul>
+  <li>Agent 创建的 skill 会<em>腐烂</em>：过时、重复、未用、schema 漂移、注意力稀释。</li>
+  <li>Curator 是后台<strong>图书管理员</strong>。
+      <em>只动 agent-created skill；不删除只归档；pinned 免疫；用 auxiliary model 跑</em>。</li>
+  <li>三态生命周期 <strong>active → stale → archived</strong>。reactivate 自动发生。</li>
+  <li>触发方式是 <strong>inactivity-based</strong>，不是 cron——
+      双门槛 (interval_hours + min_idle_hours)。</li>
+  <li>状态机部分纯 Python 规则，不用 LLM。智能 review 才启动 auxiliary agent。</li>
+  <li>每次 review 前打快照到 <code>.backups/</code>，4 周保留。</li>
+  <li>用户用 <code>hermes curator &lt;verb&gt;</code> 完全控制：pin / archive / restore / rollback。</li>
+  <li>三件事的协作：<strong>Skill 创建 + Memory 回忆 + Curator 修剪</strong> = 完整学习闭环。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 Curator 必须用 auxiliary client，不能用主 session 的 LLM？
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      默认 stale = 30 天、archive = 90 天。如果你的 Agent 用户每天用一次，这些值合适吗？
+      如果一年用一次呢？讨论怎么调。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Curator 现在只动 agent-created。如果用户也希望 "user-authored" 的旧 skill
+      被自动归档怎么办？设计一个 opt-in 机制让用户允许 Curator 管理他自己的 skill。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Curator 用 LLM review 时，可能误判——把有用的 skill 标为 stale。
+      设计一个反馈循环：用户 reactivate 一个被错判的 skill 时，怎么让 Curator
+      "学到"这个 skill 不该标 stale？
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      把 Curator 的思想扩展到 memory：写一份"Memory Curator"设计文档。
+      考虑：什么数据该 forget？怎么 forget（向量库还是 SQLite）？什么时候 forget？
+      约 500 字。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      读 <code>agent/curator_backup.py</code>。它用 <code>tarfile</code> 打快照。
+      讨论：如果用户在 Curator review 跑到一半时强制重启 Hermes，会发生什么？
+      backup 完整吗？skill 状态一致吗？需要什么 transactional 保证？
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch09-memory.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 9 章 · Memory 与 FTS5</div>
+  </a>
+  <a class="next" href="ch11-interfaces.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 11 章 · CLI / Gateway / Profile</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

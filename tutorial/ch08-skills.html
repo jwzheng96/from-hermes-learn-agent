@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 8 章 · Skills 程序性记忆 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part IV · 学习闭环
+  <span class="sep">›</span>
+  第 8 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 08</div>
+  <h1>Skills：程序性记忆</h1>
+  <p class="chapter-subtitle">从 Voyager 在 Minecraft 里建立 skill library，
+    到 Hermes 用 SKILL.md 让 Agent 越用越聪明。这一章讲"程序性记忆"是什么、为什么这么设计。</p>
+  <div class="meta">
+    <span>本章约 5,900 字</span>
+    <span>阅读 ~25 分钟</span>
+    <span>关键词：Voyager · SKILL.md · procedural memory · cache-preserving injection</span>
+  </div>
+</div>
+
+<p class="lead">
+  从这一章开始我们进入 Hermes 最有意思的部分——<em>学习闭环</em>。一个好 Agent 不应该每次
+  都从零开始，它应该把过去的成功解法存下来下次用。
+  这就是"程序性记忆"——区别于"情景记忆"（"我们上次聊过什么"），程序性记忆是
+  <em>"做某类事情的方法"</em>。
+</p>
+
+<h2 class="section"><span class="secnum">8.1</span>认知科学的两种记忆</h2>
+
+<p>这个区分来自认知科学。人脑有两种长期记忆：</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>陈述性记忆 (Declarative)</th><th>程序性记忆 (Procedural)</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>例子</td>
+      <td>"巴黎是法国首都"</td>
+      <td>"骑自行车的肌肉记忆"</td>
+    </tr>
+    <tr>
+      <td>能用语言描述？</td>
+      <td>是</td>
+      <td>很难——"做了就会"</td>
+    </tr>
+    <tr>
+      <td>提取方式</td>
+      <td>主动回忆</td>
+      <td>遇到情境自动启动</td>
+    </tr>
+    <tr>
+      <td>形成方式</td>
+      <td>看到 + 编码</td>
+      <td>重复练习</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  对 LLM Agent 来说，这两种都很重要，但<strong>实现机制完全不同</strong>：
+</p>
+
+<ul>
+  <li>陈述性记忆 → Memory 系统（向量库、SQLite 全文索引）。下章讲。</li>
+  <li>程序性记忆 → Skill 系统。本章讲。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">8.2</span>Voyager：让 Skill Library 成为研究范式</h2>
+
+<p>
+  程序性记忆在 Agent 上的开山之作是 Voyager。我们之前提过一次，这里详细看：
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Foundational Paper</div>
+  <div class="ref-title">Voyager: An Open-Ended Embodied Agent with Large Language Models</div>
+  <div class="ref-meta">Wang et al. · arXiv:2305.16291 · NeurIPS 2023</div>
+  <p>
+    NVIDIA 团队在 Minecraft 里跑 GPT-4 Agent。三个核心组件：
+  </p>
+  <ol>
+    <li><strong>Automatic Curriculum</strong>：根据当前进度提议下一个"刚好够难"的任务。</li>
+    <li><strong>Skill Library</strong>：每次完成新任务时，把解法（一段 JavaScript 代码）
+        存进 library。Library 里的代码索引向量化，下次任务来时按相似度检索。</li>
+    <li><strong>Iterative Prompting</strong>：执行报错时把错误信息送回 GPT-4 改代码，直到通过。</li>
+  </ol>
+  <p>
+    成绩：unique items 拿到 3.3 倍、移动距离 2.3 倍、tech tree milestone 解锁速度 15.3 倍。
+    更重要的是：在一个全新的 Minecraft 世界里，Voyager <em>能用学来的 skill</em>解决新任务，
+    而对照组从零开始。
+  </p>
+</div>
+
+<h3>Voyager 教会业界的事</h3>
+
+<ol>
+  <li><strong>Skill 是"可执行的"</strong>，不是描述性 prompt。Voyager 的 skill 是真的 JavaScript 函数。</li>
+  <li><strong>Skill Library 是<em>向量化检索</em>的</strong>。任务描述 → 找最相似 skill → 直接调用或参考。</li>
+  <li><strong>每个 skill 在使用中 iterative refine</strong>。错了不要扔，要改。</li>
+  <li><strong>Skill 抵抗 catastrophic forgetting</strong>：因为 skill 是 explicit storage，不是模型权重。</li>
+</ol>
+
+<p>Hermes 的 Skill 系统继承了这些思想，但选择了一个更<em>"人类友好"</em>的表达：</p>
+
+<h2 class="section"><span class="secnum">8.3</span>Hermes 的 Skill 是什么</h2>
+
+<p>
+  Hermes 的 Skill <strong>不是可执行代码</strong>，而是一份 Markdown 文档——
+  <code>SKILL.md</code>。它告诉 LLM "在什么情况下、按什么步骤、用什么工具"。
+</p>
+
+<p>看一个真实的例子。<code>skills/apple/apple-reminders/SKILL.md</code>：</p>
+
+<pre><code><span class="filename">skills/apple/apple-reminders/SKILL.md</span>
+---
+name: apple-reminders
+description: <span class="s">"Apple Reminders via remindctl: add, list, complete."</span>
+version: 1.0.0
+author: Hermes Agent
+license: MIT
+platforms: [macos]
+metadata:
+  hermes:
+    tags: [Reminders, tasks, todo, macOS, Apple]
+prerequisites:
+  commands: [remindctl]
+---
+
+# Apple Reminders
+
+Use `remindctl` to manage Apple Reminders directly from the terminal.
+Tasks sync across all Apple devices via iCloud.
+
+## Prerequisites
+
+- **macOS** with Reminders.app
+- Install: `brew install steipete/tap/remindctl`
+- Grant Reminders permission when prompted
+- Check: `remindctl status` / Request: `remindctl authorize`
+
+## When to Use
+
+- User mentions <span class="s">"reminder"</span> or <span class="s">"Reminders app"</span>
+- Creating personal to-dos with due dates that sync to iOS
+- Managing Apple Reminders lists
+- User wants tasks to appear on their iPhone/iPad
+
+## When NOT to Use
+
+- Scheduling agent alerts → use the cronjob tool instead
+- Calendar events → use Apple Calendar or Google Calendar
+- Project task management → use GitHub Issues, Notion, etc.
+
+## Quick Reference
+
+\`\`\`bash
+remindctl                    # Today's reminders
+remindctl today
+remindctl tomorrow
+remindctl week
+remindctl overdue
+remindctl all
+remindctl 2026-01-04         # Specific date
+remindctl add <span class="s">"Buy milk"</span> --due tomorrow
+remindctl done &lt;id&gt;
+\`\`\`</code></pre>
+
+<p>解剖这份 skill：</p>
+
+<table>
+  <thead>
+    <tr><th>区块</th><th>作用</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>YAML frontmatter</td><td>元数据：name、description、platforms 限制、依赖命令</td></tr>
+    <tr><td>简介段落</td><td>告诉模型这个 skill 大致干啥</td></tr>
+    <tr><td>Prerequisites</td><td>系统要求 / 安装指令 / 权限要求</td></tr>
+    <tr><td><strong>When to Use</strong></td><td>触发条件，<em>这是最关键的一块</em></td></tr>
+    <tr><td><strong>When NOT to Use</strong></td><td>反触发条件，防误用</td></tr>
+    <tr><td>Quick Reference</td><td>具体命令例子</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <em>When to Use / When NOT to Use 是 Skill 的灵魂</em>。LLM 看到这两块，就知道
+  在用户说"提醒我明天 9 点开会"时调用，在用户说"5 分钟后通知我"时不调用（那个应该走 cronjob）。
+</p>
+
+<h2 class="section"><span class="secnum">8.4</span>Skill 被发现：scan_skill_commands</h2>
+
+<p>
+  用户敲 <code>/apple-reminders</code> 启动 skill 之前，Hermes 必须先<em>发现</em>它。
+  扫描器在 <code>agent/skill_commands.py:263-326</code>：
+</p>
+
+<pre><code><span class="filename">agent/skill_commands.py:263-326 (节选)</span>
+<span class="k">def</span> <span class="f">scan_skill_commands</span>() <span class="k">-&gt;</span> Dict[str, Dict[str, Any]]:
+    <span class="s">"""Scan ~/.hermes/skills/ and return /command → skill info."""</span>
+    <span class="k">global</span> _skill_commands, _skill_commands_platform
+    _skill_commands_platform = <span class="f">_resolve_skill_commands_platform</span>()
+    _skill_commands = {}
+
+    <span class="k">from</span> tools.skills_tool <span class="k">import</span> (
+        SKILLS_DIR, _parse_frontmatter,
+        skill_matches_platform, _get_disabled_skill_names,
+    )
+    <span class="k">from</span> agent.skill_utils <span class="k">import</span> (
+        get_external_skills_dirs, iter_skill_index_files,
+    )
+
+    disabled = <span class="f">_get_disabled_skill_names</span>()
+    seen_names = <span class="f">set</span>()
+
+    <span class="c"># 扫多个目录：本地 + 外部</span>
+    dirs_to_scan = []
+    <span class="k">if</span> SKILLS_DIR.<span class="f">exists</span>():
+        dirs_to_scan.<span class="f">append</span>(SKILLS_DIR)
+    dirs_to_scan.<span class="f">extend</span>(<span class="f">get_external_skills_dirs</span>())
+
+    <span class="k">for</span> scan_dir <span class="k">in</span> dirs_to_scan:
+        <span class="k">for</span> skill_md <span class="k">in</span> <span class="f">iter_skill_index_files</span>(scan_dir, <span class="s">"SKILL.md"</span>):
+            <span class="c"># 跳过 .git / .archive 等</span>
+            <span class="k">if</span> <span class="f">any</span>(p <span class="k">in</span> {<span class="s">'.git'</span>, <span class="s">'.archive'</span>} <span class="k">for</span> p <span class="k">in</span> skill_md.parts):
+                <span class="k">continue</span>
+
+            content = skill_md.<span class="f">read_text</span>(encoding=<span class="s">'utf-8'</span>)
+            frontmatter, body = <span class="f">_parse_frontmatter</span>(content)
+
+            <span class="c"># 平台不匹配跳过（macOS-only skill 在 Linux 上不显示）</span>
+            <span class="k">if</span> <span class="k">not</span> <span class="f">skill_matches_platform</span>(frontmatter):
+                <span class="k">continue</span>
+
+            name = frontmatter.<span class="f">get</span>(<span class="s">'name'</span>, skill_md.parent.name)
+            <span class="k">if</span> name <span class="k">in</span> seen_names <span class="k">or</span> name <span class="k">in</span> disabled:
+                <span class="k">continue</span>
+
+            <span class="c"># 把 "Apple Reminders" → /apple-reminders</span>
+            cmd_name = name.<span class="f">lower</span>().<span class="f">replace</span>(<span class="s">' '</span>, <span class="s">'-'</span>).<span class="f">replace</span>(<span class="s">'_'</span>, <span class="s">'-'</span>)
+            cmd_name = _SKILL_INVALID_CHARS.<span class="f">sub</span>(<span class="s">''</span>, cmd_name)
+
+            _skill_commands[<span class="f">f</span><span class="s">"/{cmd_name}"</span>] = {
+                <span class="s">"name"</span>: name,
+                <span class="s">"description"</span>: frontmatter.<span class="f">get</span>(<span class="s">'description'</span>, <span class="s">''</span>),
+                <span class="s">"skill_md_path"</span>: <span class="f">str</span>(skill_md),
+                <span class="s">"skill_dir"</span>: <span class="f">str</span>(skill_md.parent),
+            }
+            seen_names.<span class="f">add</span>(name)
+
+    <span class="k">return</span> _skill_commands</code></pre>
+
+<p>设计要点：</p>
+
+<ol>
+  <li><strong>多目录扫描</strong>：内置 <code>skills/</code>、用户 <code>~/.hermes/skills/</code>、外部
+      <code>~/.hermes/external_skills/</code>。</li>
+  <li><strong>平台过滤</strong>：<code>platforms: [macos]</code> 的 skill 只在 macOS 上显示。</li>
+  <li><strong>禁用列表</strong>：用户可以在 config 里 <code>skills.disabled: [foo]</code> 显式禁用。</li>
+  <li><strong>命名空间</strong>：名字 → kebab-case slash command。<code>"Apple Reminders"</code> → <code>/apple-reminders</code>。</li>
+  <li><strong>同名优先</strong>：先扫到的赢。本地覆盖外部，外部覆盖内置。</li>
+</ol>
+
+<p>结果是个全局 dict <code>_skill_commands</code>，TUI 的 tab 补全直接读它。</p>
+
+<h2 class="section"><span class="secnum">8.5</span>Skill 被加载：作为 User Message</h2>
+
+<p>
+  这是 Hermes Skill 系统<strong>最聪明</strong>的设计。回顾第 5 章：
+  <em>system prompt 不能改，会破 cache</em>。但我们想动态启用 skill 怎么办？
+</p>
+
+<p>答案：<strong>把 skill 作为 user message 追加，不动 system prompt</strong>。
+   <code>agent/skill_commands.py:160-183</code>：</p>
+
+<pre><code><span class="filename">agent/skill_commands.py:160-183</span>
+<span class="k">def</span> <span class="f">_build_skill_message</span>(
+    loaded_skill, skill_dir, activation_note,
+    user_instruction=<span class="s">""</span>, runtime_note=<span class="s">""</span>, session_id=<span class="k">None</span>,
+) <span class="k">-&gt;</span> str:
+    <span class="s">"""Format a loaded skill into a user/system message payload."""</span>
+    <span class="k">from</span> tools.skills_tool <span class="k">import</span> SKILLS_DIR
+
+    content = <span class="f">str</span>(loaded_skill.<span class="f">get</span>(<span class="s">"content"</span>) <span class="k">or</span> <span class="s">""</span>)
+
+    <span class="c"># 模板变量替换（{{config.foo}} 等）</span>
+    skills_cfg = <span class="f">_load_skills_config</span>()
+    <span class="k">if</span> skills_cfg.<span class="f">get</span>(<span class="s">"template_vars"</span>, <span class="k">True</span>):
+        content = <span class="f">_substitute_template_vars</span>(content, skill_dir, session_id)
+
+    <span class="c"># Inline shell 展开 — 实验功能，默认关</span>
+    <span class="k">if</span> skills_cfg.<span class="f">get</span>(<span class="s">"inline_shell"</span>, <span class="k">False</span>):
+        timeout = <span class="f">int</span>(skills_cfg.<span class="f">get</span>(<span class="s">"inline_shell_timeout"</span>, <span class="num">10</span>) <span class="k">or</span> <span class="num">10</span>)
+        content = <span class="f">_expand_inline_shell</span>(content, skill_dir, timeout)
+
+    parts = [activation_note, <span class="s">""</span>, content.<span class="f">strip</span>()]
+    <span class="c"># 拼好后作为 user 消息追加</span>
+    <span class="k">return</span> <span class="s">"\n"</span>.<span class="f">join</span>(parts)</code></pre>
+
+<p>activation_note 长这样：</p>
+
+<pre><code>[IMPORTANT: The user has invoked the <span class="s">"apple-reminders"</span> skill, indicating they want
+you to follow its instructions for the upcoming request. Read the skill content
+below carefully and apply it to your next response.]
+
+# Apple Reminders
+
+Use `remindctl` to manage Apple Reminders directly from the terminal.
+...</code></pre>
+
+<p>这条 user message 被追加到 messages 末尾：</p>
+
+<pre><code>messages = [
+    {<span class="s">"role"</span>: <span class="s">"system"</span>, <span class="s">"content"</span>: <span class="s">"...(stable + context + volatile)"</span>},
+    {<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"你好"</span>},
+    {<span class="s">"role"</span>: <span class="s">"assistant"</span>, <span class="s">"content"</span>: <span class="s">"嗨..."</span>},
+    {<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"[Skill activated: apple-reminders]\n# Apple Reminders\n..."</span>},
+    <span class="c"># ↑ 新加的 — 不动前面任何一条</span>
+]</code></pre>
+
+<p>cache 命中分析：</p>
+
+<ul>
+  <li>System prompt 没改 → stable+context+volatile 缓存命中。</li>
+  <li>前面的 user/assistant 历史没改 → 前缀命中。</li>
+  <li>新追加这条 user message 是 cache miss，但它<em>之前</em>的内容全部命中。</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">这就是 Hermes 工程的核心智慧</span>
+  <em>把"上下文相关的能力"放进 user message 而不是 system prompt</em>。
+  System prompt 像操作系统镜像，user message 像应用程序。装应用不该重启系统。
+  这一招让 Hermes 能动态加载 skill 而不付 cache miss 代价。
+</div>
+
+<h3>对比：错误做法</h3>
+
+<p>如果你天真地用"system prompt 加 skill"：</p>
+
+<pre><code><span class="c"># BAD</span>
+<span class="k">def</span> <span class="f">load_skill</span>(skill_name):
+    agent.system_prompt += <span class="f">f</span><span class="s">"\n\n--- Skill: {skill_name} ---\n{SKILL_MD_CONTENT}"</span>
+    <span class="c"># 立刻破 cache</span></code></pre>
+
+<p>
+  下次 API call，前缀完全变了。整个 cache 报废。一个简单 turn 可能成本 ×10。
+  这就是为什么 Hermes 选择"以 user message 注入"——<em>不要碰前缀</em>。
+</p>
+
+<h2 class="section"><span class="secnum">8.6</span>Skill 的高级特性</h2>
+
+<h3>模板变量</h3>
+
+<p>SKILL.md 里可以写 <code>{{config.something}}</code>，加载时被替换：</p>
+
+<pre><code># Send Email via SMTP
+
+Use SMTP server at {{config.smtp.host}}:{{config.smtp.port}}.
+Auth user: {{config.smtp.user}}</code></pre>
+
+<p>变量来源是 <code>config.yaml</code> 的 <code>skills.config.&lt;key&gt;</code>。</p>
+
+<h3>Inline Shell 展开（实验功能）</h3>
+
+<p>SKILL.md 里的 <code>$(command)</code> 块在加载时被替换成 shell 输出：</p>
+
+<pre><code># Project Context
+
+Current branch: <span class="s">$(git branch --show-current)</span>
+Recent commits:
+<span class="s">$(git log --oneline -5)</span></code></pre>
+
+<p>
+  默认关（<code>inline_shell: false</code>），有安全顾虑。打开后注意：
+  这相当于让 SKILL.md 在加载时执行任意命令。只用于自己写的 skill。
+</p>
+
+<h3>Skill 附带 scripts</h3>
+
+<p>真正复杂的逻辑不该让 LLM 每次重新生成。把它存成脚本：</p>
+
+<pre><code>~/.hermes/skills/research/web_scrape/
+├── SKILL.md                <span class="c"># 决策手册</span>
+├── scripts/
+│   ├── extract_main.py    <span class="c"># 提取主内容的复杂 BeautifulSoup 逻辑</span>
+│   └── dedupe_urls.py
+└── references/
+    └── selectors.json     <span class="c"># 常见网站的 CSS 选择器</span></code></pre>
+
+<p>SKILL.md 里只说 <em>"用 scripts/extract_main.py 提取主内容"</em>，LLM 会用 <code>execute_code</code>
+   或 <code>terminal</code> 工具执行这个脚本。Hermes 在 <code>execute_code</code> 工具的
+   working directory 里把 scripts/ 加入 PATH。</p>
+
+<div class="callout">
+  <span class="label">为什么用脚本而不是让模型每次写</span>
+  <strong>稳定性</strong>——同样的逻辑每次生成可能有细微差异，调试困难。
+  <strong>token 成本</strong>——一段 200 行的 BeautifulSoup 代码每次都生成是浪费。
+  <strong>测试</strong>——脚本可以单独跑 unit test，工具调用没法。
+  <em>用脚本是程序性记忆的"实弹"，SKILL.md 是"使用手册"</em>。
+</div>
+
+<h2 class="section"><span class="secnum">8.7</span>Skill 的来源与生态</h2>
+
+<p>Hermes 的 skills 有三个来源：</p>
+
+<h3>① 内置 (skills/)</h3>
+
+<p>仓库自带的，~30 个分类：</p>
+
+<pre><code>skills/
+├── apple/                  apple-reminders, imessage
+├── research/               web-deep-research, fact-check
+├── devops/                 ci-cd-status, k8s-debug
+├── data-science/           pandas-eda, sklearn-baseline
+├── software-development/   conventional-commit, code-review
+├── mcp/                    mcp-server-init
+├── mlops/                  mlflow-experiment, training-monitor
+└── ...</code></pre>
+
+<h3>② 用户自创 (~/.hermes/skills/)</h3>
+
+<p>你随时可以扔一个 SKILL.md 在这个目录下，Hermes 重启自动发现。
+   或者让 Agent 自己用 <code>skill_manage(action="create")</code> 工具创建——这是核心 self-improving 机制。</p>
+
+<h3>③ Skills Hub (远程仓库)</h3>
+
+<p>Hermes 维护一个公开 skill 索引在 <a href="https://agentskills.io">agentskills.io</a>。
+   用户用 <code>hermes skills install &lt;name&gt;</code> 装。</p>
+
+<p>这个标准被多个 Agent 框架支持（Claude Desktop、Aider、Cursor）——
+   写一份 SKILL.md 可以被所有兼容工具用上。这是<em>"skill 互操作性"</em>方向，Hermes 团队主推。</p>
+
+<h2 class="section"><span class="secnum">8.8</span>Agent 自己创建 Skill</h2>
+
+<p>
+  最有趣的部分：<em>Agent 自己学新本事并把它存下来</em>。
+  Hermes 提供 <code>skill_manage</code> 工具：
+</p>
+
+<pre><code><span class="c"># LLM 决定创建一个新 skill</span>
+skill_manage(
+    action=<span class="s">"create"</span>,
+    name=<span class="s">"data-processing-pipeline"</span>,
+    skill_md=<span class="s">"""---
+name: data-processing-pipeline
+description: 'Generic CSV-to-Parquet ETL with pandas/polars.'
+version: 1.0.0
+author: Hermes Agent
+metadata:
+  hermes:
+    created_by: agent
+    tags: [data, etl, pandas]
+---
+
+# Data Processing Pipeline
+
+When the user asks to clean a CSV and produce Parquet output:
+
+## Steps
+
+1. Use read_file to inspect the CSV schema.
+2. Use execute_code to run polars (faster than pandas for &gt; 1GB):
+   ```python
+   import polars as pl
+   df = pl.read_csv(input_path, ignore_errors=True)
+   df.write_parquet(output_path, compression='zstd')
+   ```
+3. Verify with df.describe() ...
+"""</span>,
+)</code></pre>
+
+<p>触发条件由 LLM 自己判断——通常在 system prompt 里有这样一段建议：</p>
+
+<blockquote>
+  After completing a non-trivial task that required figuring out a workflow,
+  consider whether the pattern is general enough to be saved as a skill.
+  Use skill_manage(action="create", ...) when you think future you would
+  benefit from the recipe.
+  <footer>system_prompt 里的 skill creation hint</footer>
+</blockquote>
+
+<p>
+  关键元数据：<code>created_by: agent</code>——标记这是 Agent 自创，
+  为下章要讲的 <em>Curator</em> 提供归属信息。Curator 只管理 agent-created skill。
+</p>
+
+<h2 class="section"><span class="secnum">8.9</span>Hermes Skill vs Voyager Skill</h2>
+
+<table>
+  <thead>
+    <tr><th></th><th>Voyager</th><th>Hermes</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Skill 是什么</td>
+      <td>可执行 JavaScript 函数</td>
+      <td>Markdown 决策手册（可附脚本）</td>
+    </tr>
+    <tr>
+      <td>检索方式</td>
+      <td>向量相似度</td>
+      <td>显式 <code>/skill-name</code> + LLM 自己 <code>skill_view</code></td>
+    </tr>
+    <tr>
+      <td>iterative refine</td>
+      <td>报错回灌 → LLM 改代码</td>
+      <td>Curator 定期审查 + LLM <code>skill_manage(action="patch")</code></td>
+    </tr>
+    <tr>
+      <td>使用环境</td>
+      <td>Minecraft（封闭世界）</td>
+      <td>用户自己的电脑（开放世界）</td>
+    </tr>
+    <tr>
+      <td>可读性</td>
+      <td>代码——只机器懂</td>
+      <td>Markdown——人和机器都懂、能编辑</td>
+    </tr>
+    <tr>
+      <td>互操作性</td>
+      <td>专属 Voyager 实现</td>
+      <td>跨 Agent 框架（Claude/Cursor/Hermes）</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Hermes 这个设计的取舍：<em>放弃 Voyager 的全自动化</em>，换来<em>用户可审计、可编辑、可分享</em>。
+  对生产用户来说，"Agent 自己写了什么 skill"是必须可看的；不可读的代码会让人不敢信。
+</p>
+
+<h2 class="section"><span class="secnum">8.10</span>2025.12 — Skill 成为跨厂家开放标准</h2>
+
+<p>
+  本章前面把 SKILL.md 当作"Hermes 内部约定"讲。<em>2025 年 12 月一个事件改写了它的地位</em>。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Industry Standard</div>
+  <div class="ref-title">Anthropic Agent Skills Specification (Open Standard)</div>
+  <div class="ref-meta">Anthropic · 2025-12 · github.com/anthropics/skills</div>
+  <p>
+    Anthropic 把 SKILL.md 格式作为<em>开放标准</em>发布并开源 reference 实现。
+    格式核心：YAML frontmatter + Markdown body + 可选 <code>scripts/</code> 目录。
+    <strong>OpenAI 在两周内宣布 Codex CLI 和 ChatGPT 采用同一格式</strong>。
+    这是继 MCP 之后第二个跨厂家 Agent 标准。
+  </p>
+</div>
+
+<h3>标准化之后的生态形态</h3>
+
+<p>2026 年 5 月时，Agent Skills 生态已经稳定下来，主要节点：</p>
+
+<table>
+  <thead>
+    <tr><th>角色</th><th>例子</th><th>定位</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>标准 owner</strong></td>
+      <td>Anthropic <code>anthropics/skills</code></td>
+      <td>spec + reference skills（PDF / PPTX / DOCX 等）</td>
+    </tr>
+    <tr>
+      <td><strong>免费 marketplace</strong></td>
+      <td><a href="https://agentskills.io">agentskills.io</a></td>
+      <td>Hermes 早期支持的、社区免费 skill 索引</td>
+    </tr>
+    <tr>
+      <td><strong>商业 marketplace</strong></td>
+      <td><a href="https://agensi.io">agensi.io</a> · <a href="https://skillsmp.com">skillsmp.com</a></td>
+      <td>付费 skill；作者拿 80% 分成</td>
+    </tr>
+    <tr>
+      <td><strong>Host(支持加载)</strong></td>
+      <td>Claude Desktop / Claude Code / Codex CLI / ChatGPT / Cursor / Zed / Hermes</td>
+      <td>同一份 SKILL.md 在每个 host 都能用</td>
+    </tr>
+    <tr>
+      <td><strong>分发协议</strong></td>
+      <td>Claude Plugin Marketplace（<code>/plugin</code>）</td>
+      <td>三合一：MCP server + Skill + plugin</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Hermes 的 SKILL.md 是否兼容标准？</h3>
+
+<p>
+  几乎完全兼容——因为 Hermes 的格式<em>就是参考标准（之一）</em>。
+  Hermes 维护者参与了 standard 早期讨论。差异点不到 5%:
+</p>
+
+<ul>
+  <li><strong>frontmatter 字段名</strong>：标准定 <code>name, description, version, license, platforms</code>——
+      Hermes 已用相同字段。</li>
+  <li><strong><code>metadata.hermes.*</code> 是 Hermes 私有扩展</strong>，标准不要求；其他 host 看到就忽略。</li>
+  <li><strong>路径约定</strong>：标准建议 <code>SKILL.md</code> + <code>scripts/</code> + <code>references/</code> + <code>templates/</code>——Hermes 同样。</li>
+  <li><strong>触发模型</strong>：标准强调"model-invoked"（让 LLM 自动决定何时用）。Hermes 同时支持 <em>model-invoked</em> 和 <em>user-invoked (slash command)</em>。</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">实战建议</span>
+  写新 skill 时<em>避开</em> Hermes 私有字段（<code>metadata.hermes.config</code> 等）。
+  这样这份 SKILL.md 可以扔给 Claude Code 或 ChatGPT 直接用，不光在 Hermes 里跑。
+  Skill 互操作性是这个领域接下来最值钱的资产。
+</div>
+
+<h3>Agent Skills 与 MCP 的分工</h3>
+
+<p>同期 Anthropic 还推 MCP。两者经常被混淆，区别看一眼就清楚：</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>MCP Server</th><th>Agent Skill</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>形态</td>
+      <td>外部进程（JSON-RPC）</td>
+      <td>SKILL.md + scripts 文件</td>
+    </tr>
+    <tr>
+      <td>提供</td>
+      <td>Tools / Resources / Prompts</td>
+      <td>决策手册 + 可选脚本</td>
+    </tr>
+    <tr>
+      <td>调用方式</td>
+      <td>JSON-RPC <code>tools/call</code></td>
+      <td>把 SKILL.md 注入到 LLM context</td>
+    </tr>
+    <tr>
+      <td>典型例子</td>
+      <td>GitHub MCP（封装 GitHub API）</td>
+      <td>conventional-commit 风格手册</td>
+    </tr>
+    <tr>
+      <td>状态保持</td>
+      <td>进程持续运行，可有状态</td>
+      <td>无状态，文件只读</td>
+    </tr>
+    <tr>
+      <td>语言</td>
+      <td>任意（Python / TS / Rust / Go）</td>
+      <td>Markdown + 任意脚本语言</td>
+    </tr>
+    <tr>
+      <td>分发</td>
+      <td>NPM / Pip / Binary</td>
+      <td>Git repo / marketplace tarball</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>记忆口诀</strong>：<em>MCP 是"接什么外部系统"，Skill 是"怎么用这些系统"</em>。
+   一个 Excel skill 配 Excel MCP server——前者教 LLM "什么时候要做透视表"，
+   后者提供 "如何调 Excel API 真的去做"。</p>
+
+<h3>Voyager → 标准化：六年的路</h3>
+
+<p>把整条路线压成时间线：</p>
+
+<pre class="mermaid">
+timeline
+  title Procedural Memory 在 Agent 中的演进
+  section 概念期
+    2023.05 : Voyager : 可执行代码 + 自动课程
+    2023.10 : MemGPT : OS 类分层记忆
+  section 工程化
+    2024.06 : Hermes 原型 : SKILL.md 内部约定
+    2025.01 : agentskills.io : 第一个跨工具免费 marketplace
+    2025.06 : Anthropic Context Engineering : 把 skill 正名为"程序性记忆"工程实践
+  section 标准化
+    2025.12 : Anthropic Agent Skills spec : 开放标准发布
+    2026.01 : OpenAI Codex CLI + ChatGPT : 采用同一格式
+    2026.02 : agensi.io / skillsmp.com : 付费 marketplace 上线 (80/20 分账)
+    2026.04 : Pre-built skills : Anthropic 自发 PowerPoint / Excel / Word / PDF skill
+</pre>
+
+<p>下一节我们看在标准化之后，怎么写一份<em>跨工具兼容</em>的 SKILL.md。</p>
+
+<h2 class="section"><span class="secnum">8.11</span>SKILL.md 的写作规范</h2>
+
+<p>Hermes 的 AGENTS.md 里有<strong>八条 skill 写作硬规则</strong>。这些规则是 PR 评审标准：</p>
+
+<ol>
+  <li><strong><code>description</code> ≤ 60 字符</strong>，一句话，句号结尾。
+      避免营销词。</li>
+  <li><strong>引用工具时用 backtick</strong>，且必须是 Hermes 原生工具或 MCP server 名。
+      不要写 <em>"use <code>grep</code>"</em>，写 <em>"use <code>search_files</code>"</em>。</li>
+  <li><strong>platforms gating</strong> 要和实际脚本 import 一致。
+      POSIX-only 的代码必须声明 platforms。</li>
+  <li><strong>author 写真人</strong>，不写 "Hermes Agent"。</li>
+  <li><strong>section 顺序固定</strong>：标题 → 简介 → When to Use → Prerequisites → How to Run → Quick Reference → Procedure → Pitfalls → Verification。</li>
+  <li><strong>复杂逻辑放 <code>scripts/</code></strong>，不要让 LLM inline 写。</li>
+  <li><strong>测试在 <code>tests/skills/test_&lt;skill&gt;_skill.py</code></strong>，只用 stdlib + pytest + unittest.mock。</li>
+  <li><strong><code>.env.example</code> 添加要清晰隔离</strong>，不污染周围内容。</li>
+</ol>
+
+<div class="callout tip">
+  <span class="label">学到了写作的方法学</span>
+  上面 8 条本质都是<em>"让 LLM 容易理解、让人容易审计、让 PR 容易合并"</em>。
+  你自己写 skill 时也照做。写 skill 是<em>给 LLM 写说明书</em>，
+  跟写代码注释类似——细节越具体越好。
+</div>
+
+<h2 class="section"><span class="secnum">8.12</span>本章带走的</h2>
+
+<ul>
+  <li>Agent 的<strong>"程序性记忆"</strong>对应人脑的肌肉记忆。它是关于<em>"做某类事情的方法"</em>。</li>
+  <li><strong>Voyager (2023)</strong> 是开山之作：automatic curriculum + executable skill library + iterative prompting。</li>
+  <li>Hermes 的 Skill 是 <strong>SKILL.md</strong>——人类可读的决策手册，
+      含 frontmatter、When to Use / NOT to Use、Prerequisites、Quick Reference。</li>
+  <li>Skill 的<strong>核心工程招</strong>：作为 user message 追加注入，
+      <em>不动 system prompt</em>，保持 cache 命中。</li>
+  <li>三个来源：内置 / 用户自创 / agentskills.io。</li>
+  <li>Agent 用 <code>skill_manage(action="create", ...)</code> 自己创建新 skill。
+      <code>created_by: agent</code> 让 Curator 知道哪些归它管。</li>
+  <li>Hermes vs Voyager：放弃自动 retrieval 换来人类可审计可分享。</li>
+  <li>8 条 SKILL.md 写作硬规则——本质都是为了让 LLM/人/审阅者三方都满意。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 Skill 必须作为 user message 注入，而不是 system prompt？用 50 字回答。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      程序性记忆和陈述性记忆的核心区别是什么？分别给一个 Agent 应用场景。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      给一个具体场景：你天天用 <code>kubectl logs</code> 看某个特定 namespace 的 pod 日志，
+      要按时间、grep 关键字、过滤掉 healthcheck。写一份完整的 SKILL.md，遵守八条写作规则。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Voyager 的 "iterative prompting" 在 Hermes 里对应什么机制？
+      （提示：考虑 Curator 和 <code>skill_manage(action="patch")</code>）
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Hermes 的 Skill 没有"自动检索"——LLM 不会"在 100 个 skill 里挑相关的"。
+      为什么这种设计权衡值得？设想一个 Agent 有 500 个 skill 时会怎样。
+      然后想想：如何加一个"显式向量检索"机制而不破 cache？
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      读 <code>tools/skill_usage.py</code>（如果你下载了 Hermes 源码）。它存 <code>~/.hermes/skills/.usage.json</code> 里。
+      解释 <code>created_by: agent</code> 标记从哪里写入、被谁读取。这条数据链路对下章的 Curator 极重要。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch07-toolsets.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 7 章 · Toolset、安全与 Hook</div>
+  </a>
+  <a class="next" href="ch09-memory.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 9 章 · Memory 与 FTS5 跨会话搜索</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

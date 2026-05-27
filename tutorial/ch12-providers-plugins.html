@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 12 章 · Provider 与 Plugin 生态 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li class="current"><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part V · 多面架构
+  <span class="sep">›</span>
+  第 12 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 12</div>
+  <h1>Provider 与 Plugin 生态</h1>
+  <p class="chapter-subtitle">30 个 ProviderProfile 怎么处理 Provider quirks；Plugin Hook 体系；
+    一份内置 plugin 的全貌。</p>
+  <div class="meta">
+    <span>本章约 5,000 字</span>
+    <span>阅读 ~25 分钟</span>
+    <span>关键词：ProviderProfile · lazy discovery · plugin hooks · MCP host</span>
+  </div>
+</div>
+
+<p class="lead">
+  最后这一章 Part V 收尾。我们看 Hermes 怎么让用户切换 30 个不同的 LLM provider 而不改一行代码，
+  以及 plugin 系统怎么让所有功能扩展都不动 core。读完这一章你应该能<em>在不分叉仓库的情况下</em>
+  扩展 Hermes 到任何你想要的形态。
+</p>
+
+<h2 class="section"><span class="secnum">12.1</span>Provider 系统：为什么需要它</h2>
+
+<p>Hermes 用户的需求：</p>
+
+<ul>
+  <li>"我想用 Claude Opus 干主活，DeepSeek-R1 做 reasoning 实验，Haiku 跑 curator review"</li>
+  <li>"我有公司发的 OpenRouter key，但研究用 OpenAI 直连"</li>
+  <li>"国内不能访问 OpenAI，我想用国产模型（智谱 GLM、Kimi、Qwen、MiniMax）"</li>
+  <li>"我自己微调了一个开源模型 host 在 vLLM 上"</li>
+</ul>
+
+<p>所有这些都不该需要改 Hermes 源码。Provider 系统让"换模型"变成<em>配置问题</em>。</p>
+
+<h2 class="section"><span class="secnum">12.2</span>ProviderProfile：声明式 Provider</h2>
+
+<p>每个 provider 在 <code>plugins/model-providers/&lt;name&gt;/__init__.py</code> 里。最简形态：</p>
+
+<pre><code><span class="filename">plugins/model-providers/openrouter/__init__.py</span>
+<span class="k">from</span> providers <span class="k">import</span> register_provider
+<span class="k">from</span> providers.base <span class="k">import</span> ProviderProfile
+
+<span class="f">register_provider</span>(<span class="f">ProviderProfile</span>(
+    name=<span class="s">"openrouter"</span>,
+    display_name=<span class="s">"OpenRouter"</span>,
+    description=<span class="s">"Aggregator — 300+ models behind one API"</span>,
+    base_url=<span class="s">"https://openrouter.ai/api/v1"</span>,
+    env_vars=(<span class="s">"OPENROUTER_API_KEY"</span>,),
+    aliases=(<span class="s">"or"</span>,),
+    fallback_models=(
+        <span class="s">"anthropic/claude-opus-4.6"</span>,
+        <span class="s">"openai/gpt-5.2"</span>,
+        <span class="s">"deepseek/deepseek-v4"</span>,
+    ),
+))</code></pre>
+
+<p>这是<em>纯声明式</em>。没有自定义类、没有方法重载——只是几个字段。Hermes 主代码读这些字段构造 HTTP request。</p>
+
+<p>ProviderProfile 的关键字段：</p>
+
+<table>
+  <thead>
+    <tr><th>字段</th><th>作用</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>name</code></td><td>唯一标识</td></tr>
+    <tr><td><code>display_name</code></td><td>用户看到的名字</td></tr>
+    <tr><td><code>base_url</code></td><td>OpenAI 兼容 endpoint</td></tr>
+    <tr><td><code>env_vars</code></td><td>从哪个 env var 读 API key</td></tr>
+    <tr><td><code>aliases</code></td><td>命令行简写 <code>or</code>、<code>oai</code> 等</td></tr>
+    <tr><td><code>fallback_models</code></td><td>用户不指定时用哪些</td></tr>
+    <tr><td><code>auth_method</code></td><td><code>api_key</code> / <code>oauth</code> / <code>none</code></td></tr>
+    <tr><td><code>quirks</code></td><td>Provider-specific 处理（下面讲）</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">12.3</span>处理 Quirks：方法重载</h2>
+
+<p>简单 provider（OpenRouter、智谱、OpenAI 自家）声明式就够了。但有<em>怪癖</em>的需要重载方法。
+   看 <code>plugins/model-providers/deepseek/__init__.py</code>:</p>
+
+<pre><code><span class="filename">plugins/model-providers/deepseek/__init__.py</span>
+<span class="s">"""DeepSeek provider profile.
+
+DeepSeek's V4 family defaults to thinking-mode ON when extra_body.thinking
+is unset. The API then returns reasoning_content and starts enforcing the
+contract that subsequent turns echo it back; combined with how Hermes
+replays history this lands on HTTP 400 reasoning_content must be passed
+back error.
+
+This profile overrides build_api_kwargs_extras to mirror the wire shape
+that DeepSeek's OpenAI-compat endpoint expects:
+
+    {"reasoning_effort": "&lt;low|medium|high|max&gt;",
+     "extra_body": {"thinking": {"type": "enabled" | "disabled"}}}
+"""</span>
+<span class="k">from</span> <span class="f">__future__</span> <span class="k">import</span> annotations
+<span class="k">from</span> typing <span class="k">import</span> Any
+<span class="k">from</span> providers <span class="k">import</span> register_provider
+<span class="k">from</span> providers.base <span class="k">import</span> ProviderProfile
+
+<span class="k">def</span> <span class="f">_model_supports_thinking</span>(model: str <span class="k">|</span> <span class="k">None</span>) <span class="k">-&gt;</span> bool:
+    m = (model <span class="k">or</span> <span class="s">""</span>).<span class="f">strip</span>().<span class="f">lower</span>()
+    <span class="k">if</span> <span class="k">not</span> m: <span class="k">return</span> <span class="k">False</span>
+    <span class="k">if</span> m.<span class="f">startswith</span>(<span class="s">"deepseek-v"</span>) <span class="k">and</span> <span class="k">not</span> m.<span class="f">startswith</span>(<span class="s">"deepseek-v3"</span>):
+        <span class="k">return</span> <span class="k">True</span>
+    <span class="k">if</span> m == <span class="s">"deepseek-reasoner"</span>:
+        <span class="k">return</span> <span class="k">True</span>
+    <span class="k">return</span> <span class="k">False</span>
+
+<span class="k">class</span> <span class="n">DeepSeekProfile</span>(<span class="n">ProviderProfile</span>):
+    <span class="s">"""DeepSeek — extra_body.thinking + top-level reasoning_effort."""</span>
+
+    <span class="k">def</span> <span class="f">build_api_kwargs_extras</span>(self, *, model: str <span class="k">|</span> <span class="k">None</span> = <span class="k">None</span>,
+                                  **context: Any) <span class="k">-&gt;</span> <span class="f">dict</span>[str, Any]:
+        body: <span class="f">dict</span>[str, Any] = {}
+        <span class="k">if</span> <span class="f">_model_supports_thinking</span>(model):
+            <span class="c"># 显式传 thinking enable，避免后续 echo back 报错</span>
+            body[<span class="s">"extra_body"</span>] = {
+                <span class="s">"thinking"</span>: {<span class="s">"type"</span>: <span class="s">"enabled"</span>}
+            }
+        <span class="k">return</span> body
+
+<span class="f">register_provider</span>(<span class="f">DeepSeekProfile</span>(
+    name=<span class="s">"deepseek"</span>,
+    display_name=<span class="s">"DeepSeek"</span>,
+    description=<span class="s">"DeepSeek API (reasoning models supported)"</span>,
+    base_url=<span class="s">"https://api.deepseek.com/v1"</span>,
+    env_vars=(<span class="s">"DEEPSEEK_API_KEY"</span>,),
+    fallback_models=(<span class="s">"deepseek-v4-pro"</span>, <span class="s">"deepseek-chat"</span>),
+))</code></pre>
+
+<p>注意</p>
+
+<ol>
+  <li><strong>顶部那段注释</strong>价值连城——它是踩坑后写下的实战 lesson。
+      "如果不传 thinking enable，DeepSeek V4 返回 reasoning_content 但下一轮你不 echo back 会 400"。
+      <em>这种知识只有踩过坑的人才知道</em>，开放源码项目的注释是这种知识的最佳载体。</li>
+  <li><strong>重载是<em>方法粒度</em></strong>，不是子类化整个 client。<code>build_api_kwargs_extras</code>
+      只在某一步被调用，返回的 dict 合并进 API 请求 body。其他全部继承默认。</li>
+  <li>每个 quirk 单独一个 hook 方法：<code>build_api_kwargs_extras</code>、
+      <code>normalize_response</code>、<code>build_auth_headers</code>、
+      <code>filter_tools</code>……Hermes 留了大约 10 个扩展点。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">12.4</span>真实 Quirk 四例</h2>
+
+<p>不同 provider 的 quirk 五花八门。挑四个 Hermes 实际处理过的：</p>
+
+<h3>Quirk 1: Gemini 不支持 tool_choice="required"</h3>
+
+<p>GeminiProfile 重载：</p>
+
+<pre><code><span class="k">class</span> <span class="n">GeminiProfile</span>(<span class="n">ProviderProfile</span>):
+    <span class="k">def</span> <span class="f">build_api_kwargs_extras</span>(self, **ctx):
+        kwargs = ctx.<span class="f">get</span>(<span class="s">"_api_kwargs"</span>, {})
+        <span class="k">if</span> kwargs.<span class="f">get</span>(<span class="s">"tool_choice"</span>) == <span class="s">"required"</span>:
+            <span class="c"># Gemini 不支持 — 改 auto</span>
+            kwargs[<span class="s">"tool_choice"</span>] = <span class="s">"auto"</span>
+            logger.<span class="f">warning</span>(<span class="s">"Gemini doesn't support tool_choice=required; "</span>
+                           <span class="s">"falling back to auto"</span>)
+        <span class="k">return</span> {}</code></pre>
+
+<h3>Quirk 2: Anthropic prompt cache 显式标记</h3>
+
+<p>大部分 provider 自动 cache；Anthropic 要显式 <code>cache_control</code>。AnthropicProfile：</p>
+
+<pre><code><span class="k">class</span> <span class="n">AnthropicProfile</span>(<span class="n">ProviderProfile</span>):
+    <span class="k">def</span> <span class="f">supports_cache_control</span>(self) <span class="k">-&gt;</span> bool:
+        <span class="k">return</span> <span class="k">True</span>
+
+    <span class="k">def</span> <span class="f">annotate_cache_breakpoints</span>(self, messages):
+        <span class="c"># 在 system message 末尾、tools 末尾、context 末尾标 4 个 breakpoint</span>
+        ...</code></pre>
+
+<h3>Quirk 3: Codex Responses API (OpenAI 新协议)</h3>
+
+<p>OpenAI 推 Responses API 替代 Chat Completions。CodexProfile：</p>
+
+<pre><code><span class="k">class</span> <span class="n">CodexProfile</span>(<span class="n">ProviderProfile</span>):
+    <span class="k">def</span> <span class="f">api_mode</span>(self) <span class="k">-&gt;</span> str:
+        <span class="k">return</span> <span class="s">"codex_responses"</span>     <span class="c"># 主 loop 看到这个会走不同 path</span>
+
+    <span class="k">def</span> <span class="f">normalize_response</span>(self, raw_response):
+        <span class="c"># 把 Responses API 的 {output: [...]} 格式转成</span>
+        <span class="c"># 经典 Chat Completions 的 {choices: [{message: ...}]}</span>
+        ...</code></pre>
+
+<p>主 <code>conversation_loop</code> 不知道这事——它只看经典格式。Provider profile 负责适配。</p>
+
+<h3>Quirk 4: Unique tool names 强制（DeepSeek / Kimi / MiMo）</h3>
+
+<p>这些 provider 不允许 tools 列表里有重名工具，否则 400。Hermes 默认确保 unique，
+   但 long-running gateway 可能因为 cache pollution 出现重名。Profile 在
+   <code>filter_tools</code> hook 里做去重：</p>
+
+<pre><code><span class="k">def</span> <span class="f">filter_tools</span>(self, tools):
+    seen = <span class="f">set</span>()
+    result = []
+    <span class="k">for</span> t <span class="k">in</span> tools:
+        n = t[<span class="s">"function"</span>][<span class="s">"name"</span>]
+        <span class="k">if</span> n <span class="k">in</span> seen:
+            logger.<span class="f">warning</span>(<span class="s">"Dropping duplicate tool name %s for strict provider"</span>, n)
+            <span class="k">continue</span>
+        seen.<span class="f">add</span>(n)
+        result.<span class="f">append</span>(t)
+    <span class="k">return</span> result</code></pre>
+
+<h2 class="section"><span class="secnum">12.5</span>Lazy Discovery</h2>
+
+<p>30 个 provider 全部都 import 太费启动时间。Hermes 用 <em>lazy discovery</em>。
+   <code>providers/__init__.py</code>:</p>
+
+<pre><code><span class="filename">providers/__init__.py:1-100</span>
+_REGISTRY: <span class="f">dict</span>[str, ProviderProfile] = {}
+_ALIASES: <span class="f">dict</span>[str, str] = {}
+_discovered = <span class="k">False</span>
+
+<span class="k">def</span> <span class="f">register_provider</span>(profile: ProviderProfile) <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Register a provider profile by name and aliases.
+
+    Later registrations with the same name replace earlier — so user
+    plugins under $HERMES_HOME/plugins/model-providers/ can override
+    bundled profiles without editing repo code.
+    """</span>
+    _REGISTRY[profile.name] = profile
+    <span class="k">for</span> alias <span class="k">in</span> profile.aliases:
+        _ALIASES[alias] = profile.name
+
+<span class="k">def</span> <span class="f">get_provider_profile</span>(name: str) <span class="k">-&gt;</span> ProviderProfile <span class="k">|</span> <span class="k">None</span>:
+    <span class="s">"""Look up a profile by name or alias."""</span>
+    <span class="k">if</span> <span class="k">not</span> _discovered:
+        <span class="f">_discover_providers</span>()
+    canonical = _ALIASES.<span class="f">get</span>(name, name)
+    <span class="k">return</span> _REGISTRY.<span class="f">get</span>(canonical)
+
+<span class="k">def</span> <span class="f">_discover_providers</span>() <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Populate registry by importing every provider plugin.
+
+    Order (later overrides earlier):
+      1. Bundled: &lt;repo&gt;/plugins/model-providers/&lt;name&gt;/
+      2. User: $HERMES_HOME/plugins/model-providers/&lt;name&gt;/
+      3. Legacy: providers/&lt;name&gt;.py
+    """</span>
+    <span class="k">global</span> _discovered
+    <span class="k">if</span> _discovered: <span class="k">return</span>
+    _discovered = <span class="k">True</span>
+
+    <span class="c"># 1. Bundled</span>
+    <span class="k">if</span> _BUNDLED_PLUGINS_DIR.<span class="f">is_dir</span>():
+        <span class="k">for</span> child <span class="k">in</span> <span class="f">sorted</span>(_BUNDLED_PLUGINS_DIR.<span class="f">iterdir</span>()):
+            <span class="k">if</span> <span class="k">not</span> child.<span class="f">is_dir</span>() <span class="k">or</span> child.name.<span class="f">startswith</span>((<span class="s">"_"</span>, <span class="s">"."</span>)):
+                <span class="k">continue</span>
+            <span class="f">_import_plugin_dir</span>(child, <span class="s">"bundled"</span>)
+
+    <span class="c"># 2. User</span>
+    user_dir = <span class="f">_user_plugins_dir</span>()
+    <span class="k">if</span> user_dir <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+        <span class="k">for</span> child <span class="k">in</span> <span class="f">sorted</span>(user_dir.<span class="f">iterdir</span>()):
+            <span class="k">if</span> <span class="k">not</span> child.<span class="f">is_dir</span>() <span class="k">or</span> child.name.<span class="f">startswith</span>((<span class="s">"_"</span>, <span class="s">"."</span>)):
+                <span class="k">continue</span>
+            <span class="f">_import_plugin_dir</span>(child, <span class="s">"user"</span>)
+
+    <span class="c"># 3. Legacy: providers/{name}.py — 老路径兼容</span>
+    <span class="k">for</span> legacy <span class="k">in</span> (Path(<span class="f">__file__</span>).parent.<span class="f">glob</span>(<span class="s">"*.py"</span>)):
+        <span class="k">if</span> legacy.name <span class="k">in</span> (<span class="s">"__init__.py"</span>, <span class="s">"base.py"</span>): <span class="k">continue</span>
+        importlib.<span class="f">import_module</span>(<span class="f">f</span><span class="s">"providers.{legacy.stem}"</span>)</code></pre>
+
+<p>设计点：</p>
+
+<ul>
+  <li><strong>Lazy</strong>：第一次 <code>get_provider_profile()</code> 触发整个扫描。
+      不调就一个 provider 都不 import。启动快。</li>
+  <li><strong>Three-layer override</strong>：bundled → user → legacy。后者覆盖前者。
+      让用户能在 <code>$HERMES_HOME/plugins/model-providers/openai/__init__.py</code>
+      重写 bundled OpenAI 配置。</li>
+  <li><strong>独立于通用 PluginManager</strong>：model-provider plugin 单独发现路径。
+      原因——通用 PluginManager 会 invoke <code>register(ctx)</code>，
+      但 provider 是模块级 <code>register_provider(...)</code>。混在一起会双注册。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">12.6</span>30 个 Provider</h2>
+
+<p>Hermes 仓库的 <code>plugins/model-providers/</code>:</p>
+
+<pre><code>plugins/model-providers/
+├── anthropic              # Claude 直连
+├── openai-codex           # OpenAI Responses API
+├── openrouter             # 聚合器
+├── deepseek               # DeepSeek V4 + R1
+├── gemini                 # Google
+├── xai                    # Grok
+├── nous                   # Nous Portal
+├── alibaba                # 通义千问
+├── alibaba-coding-plan
+├── kilocode               # 国产 coding 专用
+├── kimi-coding            # 月之暗面
+├── minimax                # MiniMax
+├── novita                 # AI 云
+├── ollama-cloud           # 本地 + 云端 Ollama
+├── nvidia                 # NIM
+├── stepfun                # 阶跃星辰
+├── xiaomi                 # MiMo
+├── zai                    # 智谱 GLM
+├── huggingface
+├── opencode-zen
+├── arcee
+├── azure-foundry          # Azure 系
+├── bedrock                # AWS
+├── copilot                # GitHub Copilot
+├── gmi                    # GMI
+├── ai-gateway
+├── qwen-oauth             # 通义 OAuth flow
+├── custom                 # 兜底 — 任意 OpenAI 兼容</code></pre>
+
+<p>30 个 provider，全部走同一份核心代码。<em>切换提供商=改配置</em>：</p>
+
+<pre><code><span class="c"># config.yaml</span>
+model:
+  provider: anthropic
+  model: claude-opus-4.7
+  fallback_provider: openrouter
+  fallback_model: openai/gpt-5.2</code></pre>
+
+<h3>2026 年的 Provider 现状</h3>
+
+<p>到本书写作时（2026 年 5 月），主流 provider 的<em>能力梯度</em>大致是这样：</p>
+
+<table>
+  <thead>
+    <tr><th>Provider</th><th>当前主力模型</th><th>定位</th><th>价格区间 (input/M)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Anthropic</td><td>Claude Opus 4.7 / Sonnet 4.6</td><td>SOTA reasoning + 长上下文</td><td>$15 / $3</td></tr>
+    <tr><td>OpenAI</td><td>GPT-5.2 / GPT-5 / o3</td><td>SOTA reasoning，强工具调用</td><td>$15 / $2</td></tr>
+    <tr><td>Google</td><td>Gemini 3 Pro / Flash</td><td>多模态、便宜 Flash</td><td>$7 / $0.4</td></tr>
+    <tr><td>DeepSeek</td><td>V4 / R2</td><td>开源权重，性价比之王</td><td>$0.6 / $2</td></tr>
+    <tr><td>智谱 (z.ai)</td><td>GLM-5</td><td>中文友好，本地可部署</td><td>~$1</td></tr>
+    <tr><td>Moonshot</td><td>Kimi K2 / Reasoning</td><td>长上下文 + reasoning</td><td>$2</td></tr>
+    <tr><td>Alibaba</td><td>Qwen 3.5 / Thinking</td><td>开源权重 + reasoning</td><td>$1 / 开源免费</td></tr>
+    <tr><td>xAI</td><td>Grok 4</td><td>实时数据接入</td><td>$5</td></tr>
+    <tr><td>本地 (Ollama / vLLM)</td><td>Llama 4 / Qwen 3</td><td>完全离线</td><td>电费</td></tr>
+  </tbody>
+</table>
+
+<div class="callout tip">
+  <span class="label">2026 选模型策略</span>
+  <strong>主对话</strong>：Claude Opus 4.7 或 GPT-5.2（顶级 reasoning）。<br>
+  <strong>辅助任务</strong>（curator review、auxiliary client、压缩）：Sonnet 4.6 / Gemini Flash / DeepSeek（便宜）。<br>
+  <strong>fallback</strong>：选一个<em>不同 provider</em>的，防 Anthropic / OpenAI 整厂宕机时全挂。<br>
+  <strong>国内场景</strong>：智谱 GLM-5、Kimi K2、Qwen 3.5 都已能产线用。
+</div>
+
+<h3>Provider 厂商的 Agent SDK</h3>
+
+<p>2025–2026 各家除了卖模型，也都推出"配套 Agent SDK"。Hermes 不强制用——但了解它们对比 Hermes 设计有帮助：</p>
+
+<table>
+  <thead>
+    <tr><th>SDK</th><th>核心抽象</th><th>位置</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>OpenAI Agents SDK</strong></td><td>Handoff（Agent 之间交接）</td><td>取代 2024 的 Assistants API</td></tr>
+    <tr><td><strong>Anthropic Claude Agent SDK</strong></td><td>Tool use + Sub-agents</td><td>2025 中发布</td></tr>
+    <tr><td><strong>Google Vertex Agents</strong></td><td>声明式 yaml 编排</td><td>企业向</td></tr>
+    <tr><td><strong>Microsoft Agent Framework (MAF)</strong></td><td>Actor 模型</td><td>替代 AutoGen</td></tr>
+  </tbody>
+</table>
+
+<p>
+  和 Hermes 的关系：这些是<em>"模型厂家的 framework"</em>，绑定特定 provider。
+  Hermes 选择不依赖任何 SDK，直接用 OpenAI 兼容协议——为的是不被任何一家锁定。
+</p>
+
+<h2 class="section"><span class="secnum">12.7</span>通用 Plugin 系统</h2>
+
+<p>第 7 章已经介绍过 Plugin Hook。这里完整看 PluginManager 的实现。
+   <code>hermes_cli/plugins.py</code>:</p>
+
+<pre><code><span class="filename">hermes_cli/plugins.py (摘要)</span>
+<span class="k">class</span> <span class="n">PluginManager</span>:
+    <span class="k">def</span> <span class="f">__init__</span>(self):
+        self._hooks: <span class="f">dict</span>[str, <span class="f">list</span>[Callable]] = {h: [] <span class="k">for</span> h <span class="k">in</span> VALID_HOOKS}
+        self._plugin_tool_names: <span class="f">set</span> = <span class="f">set</span>()
+        self._cli_subcommands: <span class="f">dict</span>[str, dict] = {}
+
+    <span class="k">def</span> <span class="f">discover_plugins</span>(self):
+        <span class="s">"""Find &amp; load all plugins from:
+        - bundled plugins/ (only if has plugin.yaml)
+        - $HERMES_HOME/plugins/
+        - project-local ./.hermes/plugins/
+        - pip entry points (group: 'hermes_plugins')
+        """</span>
+        <span class="k">for</span> directory <span class="k">in</span> [_BUNDLED, _USER, _PROJECT_LOCAL]:
+            <span class="k">for</span> plugin_dir <span class="k">in</span> directory.<span class="f">iterdir</span>():
+                manifest = plugin_dir / <span class="s">"plugin.yaml"</span>
+                <span class="k">if</span> <span class="k">not</span> manifest.<span class="f">exists</span>():
+                    <span class="k">continue</span>
+                self.<span class="f">_load_plugin</span>(plugin_dir)
+
+        <span class="c"># pip entry points</span>
+        <span class="k">for</span> ep <span class="k">in</span> entry_points(group=<span class="s">"hermes_plugins"</span>):
+            self.<span class="f">_load_entry_point</span>(ep)
+
+    <span class="k">def</span> <span class="f">_load_plugin</span>(self, plugin_dir: Path):
+        manifest = <span class="f">yaml_load</span>(plugin_dir / <span class="s">"plugin.yaml"</span>)
+        kind = manifest.<span class="f">get</span>(<span class="s">"kind"</span>, <span class="s">"general"</span>)
+        <span class="k">if</span> kind == <span class="s">"model-provider"</span>:
+            <span class="c"># model provider 走另一条 discovery，这里跳过</span>
+            <span class="k">return</span>
+
+        <span class="c"># 导入 __init__.py 拿 register()</span>
+        spec = importlib.util.<span class="f">spec_from_file_location</span>(...)
+        module = importlib.util.<span class="f">module_from_spec</span>(spec)
+        spec.loader.<span class="f">exec_module</span>(module)
+
+        <span class="k">if</span> <span class="k">not</span> <span class="f">hasattr</span>(module, <span class="s">"register"</span>):
+            logger.<span class="f">warning</span>(<span class="s">"Plugin %s lacks register() — skipping"</span>, plugin_dir)
+            <span class="k">return</span>
+
+        ctx = <span class="f">PluginContext</span>(self, plugin_dir, manifest)
+        module.<span class="f">register</span>(ctx)</code></pre>
+
+<h3>PluginContext</h3>
+
+<p>给 plugin 用的 helper API。可以注册 hook、tool、CLI subcommand：</p>
+
+<pre><code><span class="k">class</span> <span class="n">PluginContext</span>:
+    <span class="k">def</span> <span class="f">register_hook</span>(self, hook_name, callback):
+        self._manager._hooks[hook_name].<span class="f">append</span>(callback)
+
+    <span class="k">def</span> <span class="f">register_tool</span>(self, name, toolset, schema, handler, ...):
+        <span class="k">from</span> tools.registry <span class="k">import</span> registry
+        registry.<span class="f">register</span>(name=name, toolset=toolset, ...)
+        self._manager._plugin_tool_names.<span class="f">add</span>(name)
+
+    <span class="k">def</span> <span class="f">register_cli_command</span>(self, name, parser_fn, handler):
+        <span class="c"># 让 hermes &lt;plugin_name&gt; &lt;subcmd&gt; 可用</span>
+        self._manager._cli_subcommands[name] = {
+            <span class="s">"parser_fn"</span>: parser_fn,
+            <span class="s">"handler"</span>: handler,
+        }</code></pre>
+
+<h2 class="section"><span class="secnum">12.8</span>真实 plugin 一例：Kanban</h2>
+
+<p>
+  Hermes 自带的 <code>kanban</code> plugin 是多 agent 任务板。它展示了 plugin 能做到多大规模：
+</p>
+
+<pre><code>plugins/kanban/
+├── plugin.yaml
+├── __init__.py            <span class="c"># register(ctx)</span>
+├── kanban_cli.py          <span class="c"># hermes kanban &lt;verb&gt; CLI</span>
+├── kanban_tool.py         <span class="c"># LLM tools: kanban_show, kanban_complete, ...</span>
+├── kanban_dispatcher.py   <span class="c"># 长跑后台 daemon</span>
+├── kanban_db.py           <span class="c"># SQLite 持久化</span>
+├── dashboard/             <span class="c"># Web UI（FastAPI + React）</span>
+│   ├── api.py
+│   ├── dist/              <span class="c"># 编译好的 React</span>
+│   └── manifest.json
+└── systemd/
+    └── hermes-kanban-dispatcher.service</code></pre>
+
+<p>它做的事：</p>
+
+<ul>
+  <li>提供一个多 Agent 协同任务板（用 SQLite 持久化）。</li>
+  <li>注册 9 个 <code>kanban_*</code> 工具供 Agent 操作任务。</li>
+  <li>注册一组 <code>hermes kanban</code> CLI 子命令供用户操作。</li>
+  <li>提供 Web dashboard 给运维监控。</li>
+  <li>提供 systemd unit 文件方便部署成 daemon。</li>
+</ul>
+
+<p>整个 plugin 大约 3000 行代码——<em>不动 Hermes core 一行</em>。
+   这就是 plugin 系统的威力上限。</p>
+
+<h2 class="section"><span class="secnum">12.9</span>"Plugin 不动 core" 的铁律</h2>
+
+<p>Hermes AGENTS.md 里有：</p>
+
+<blockquote>
+  Plugins MUST NOT modify core files (run_agent.py, cli.py, gateway/run.py,
+  hermes_cli/main.py, etc.). If a plugin needs a capability the framework
+  doesn't expose, expand the generic plugin surface (new hook, new ctx method)
+  — never hardcode plugin-specific logic into core.
+  <footer>Hermes AGENTS.md, "Teknium rule, May 2026"</footer>
+</blockquote>
+
+<p>这条规则的<em>原因和历史</em>很重要：</p>
+
+<p>
+  早期 Hermes 在 <code>main.py</code> 里硬编码了 honcho（一个 memory plugin）的 argparse
+  子命令。每次 honcho 改命令格式，要发 PR 改 main.py。PR #5295 移除了这 95 行
+  硬编码，换成一个通用的"plugin 可注册 CLI subcommand"机制。
+</p>
+
+<p>从此规则确定：core 永远不知道任何特定 plugin 的存在。
+   plugin 需要新能力，扩 PluginContext，加新 hook。</p>
+
+<div class="callout good">
+  <span class="label">设计原则</span>
+  这条规则保证 Hermes 长期可维护。它的精神是
+  <em>"开放扩展，封闭修改" (Open/Closed Principle) 的严格执行</em>。
+  任何 plugin 系统都该这么做。否则 plugin 互相干扰、core 越改越乱、最终重写。
+</div>
+
+<h2 class="section"><span class="secnum">12.10</span>"无新 in-tree memory provider" 的政策</h2>
+
+<p>同样的精神扩展到 memory plugin。AGENTS.md 里：</p>
+
+<blockquote>
+  No new in-tree memory providers (policy, May 2026): the set of
+  built-in memory providers under plugins/memory/ is closed. New memory
+  backends must ship as <em>standalone plugin repos</em> that users install
+  into ~/.hermes/plugins/ (or via pip entry points).
+  <footer>Hermes AGENTS.md</footer>
+</blockquote>
+
+<p>意思：哪怕你写了世界最强的新 memory provider，<strong>不收</strong>进 Hermes 主仓库。
+   你必须独立发包。</p>
+
+<p>动机：</p>
+
+<ul>
+  <li><strong>降低耦合</strong>：每个 memory provider 自有迭代节奏，不被 Hermes release 周期束缚。</li>
+  <li><strong>用户选择</strong>：装 Hermes 不强制带 8 个 memory provider 的依赖。</li>
+  <li><strong>生态去中心化</strong>：第三方 provider 和官方 provider 平等。</li>
+</ul>
+
+<p>这是<em>对生态的承诺</em>。Hermes 不想做"所有功能都在我这"的胖框架，
+   它想做"thin core + 强生态"的瘦平台。</p>
+
+<h2 class="section"><span class="secnum">12.11</span>本章带走的</h2>
+
+<ul>
+  <li>30 个 Provider 通过<strong>声明式 ProviderProfile</strong> 接入。简单 provider 几行字段，复杂 provider 重载方法处理 quirks。</li>
+  <li><strong>真实 quirks 不少</strong>：DeepSeek thinking flag、Gemini tool_choice、Codex Responses API、Unique tools enforcement——每个都隔离在 Profile 子类。</li>
+  <li><strong>Lazy discovery</strong> 让启动快。bundled → user → legacy 三层 override 顺序。</li>
+  <li>30 个 provider 覆盖国际 + 国产 + 自建 + 聚合器 + 本地。</li>
+  <li>通用 <strong>PluginManager</strong> 走 plugin.yaml + register(ctx) 协议。注册 hook / tool / CLI subcommand。</li>
+  <li><strong>Plugin 不动 core 铁律</strong>（Teknium rule, 2026.05）：扩展点开放，core 闭合。
+      违反就闭 PR。</li>
+  <li><strong>无新 in-tree memory provider</strong> 政策：保持生态去中心化，不做胖框架。</li>
+  <li>Kanban plugin 是 plugin 能达到的规模上限例子——3000 行不动 core。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      ProviderProfile 是声明式的——但 quirk 需要重载方法。这种"声明 + 重载"的混合设计有什么好处？
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      你想接一个新的 OpenAI 兼容 endpoint（你自己 host 的 vLLM）。
+      写出最简的 <code>~/.hermes/plugins/model-providers/myvllm/__init__.py</code>。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Lazy discovery 有一个 trade-off：第一次 <code>get_provider_profile()</code> 调用慢
+      （扫描 30 个目录）。设计一个 caching 策略让冷启动也快——比如<em>"启动时只读 manifest，
+      用到 profile 时再 import 模块"</em>。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Hermes 不允许"两个 plugin 注册同名工具（不带 override）"。但两个 plugin 都需要 <code>fetch_url</code> 这种工具怎么办？
+      讨论：是 plugin 应该用 namespace（<code>fetch_url_v2</code>），还是 core 应该提供工具别名机制？
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Plugin Hook 系统有一个被忽略的<em>顺序依赖</em>问题：两个 plugin 都注册了
+      <code>transform_tool_result</code>，先后顺序决定最终结果。
+      读 <code>invoke_hook</code> 的实现（第 7 章末有引），讨论这个顺序是怎么定的。
+      然后写一段约 200 字的"plugin 协作 best practices"。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      "Plugin 不动 core 铁律"听起来很纯粹，但有边界例子：plugin 需要在 <code>run_conversation</code>
+      的某个具体行号插入 hook，core 还没暴露这个 hook。怎么演进？写一份"扩展 Plugin Hook 集"的提案模板：
+      命名、参数、调用时机、回调返回值语义。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch11-interfaces.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 11 章 · CLI / Gateway / Profile</div>
+  </a>
+  <a class="next" href="ch13-frontier.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 13 章 · 2024–2026 Agent Frontier</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

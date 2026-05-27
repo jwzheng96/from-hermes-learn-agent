@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 章 · Agent 的前世今生 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part I · 基础
+  <span class="sep">›</span>
+  第 1 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 01</div>
+  <h1>Agent 的前世今生</h1>
+  <p class="chapter-subtitle">从 1956 年的"自动定理证明"，到 2026 年的 Claude Code 和 Hermes。
+    四年时间里"Agent"这个词的含义变了什么？</p>
+  <div class="meta">
+    <span>本章约 5,800 字</span>
+    <span>阅读 ~25 分钟</span>
+    <span>关键词：ReAct · AutoGPT · MCP · 历史</span>
+  </div>
+</div>
+
+<p class="lead">
+  Agent 这个词，在不同年代意味着完全不同的东西。1956 年达特茅斯会议上，
+  人们说"agent"指能解逻辑题的程序；1990 年代说"intelligent agent"指浏览器里
+  那只爱屁屁的小狗 Clippy；2017 年 AlphaGo 也是 agent；2022 年底 ChatGPT 突然让
+  这个词又火了，到 2026 年它几乎成了"LLM 干活"的代名词。
+</p>
+
+<p>
+  但要真正理解今天的 Agent，你得明白它继承了什么、又抛弃了什么。这一章我们快速
+  梳理从 1956 到 2026 的关键节点，最后落到 Hermes 站在这条时间线上的什么位置。
+</p>
+
+<h2 class="section"><span class="secnum">1.1</span>"Agent" 到底指什么</h2>
+
+<p>
+  这个词在不同语境下指代不同对象。读 paper 或者 doc 时务必看上下文：
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>语境</th>
+      <th>含义</th>
+      <th>典型例子</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>强化学习</td>
+      <td>在环境里采取行动以最大化奖励的实体</td>
+      <td>AlphaGo、Atari DQN</td>
+    </tr>
+    <tr>
+      <td>分布式系统</td>
+      <td>跑在节点上的一个守护进程</td>
+      <td>Datadog Agent、SSH Agent</td>
+    </tr>
+    <tr>
+      <td>多智能体系统 (MAS)</td>
+      <td>有自主性、社会性、目标导向的软件实体</td>
+      <td>Belief-Desire-Intention 模型</td>
+    </tr>
+    <tr>
+      <td>LLM 时代 (本书)</td>
+      <td>用 LLM 做决策、用工具改变外部状态的循环系统</td>
+      <td>AutoGPT、Claude Code、Hermes</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  本书全文谈的是第 4 种。但要理解为什么 LLM 时代的 Agent 长成这样，前三种的影子无处不在。
+</p>
+
+<div class="callout">
+  <span class="label">定义</span>
+  本书采用 Anthropic 2024 年提出的工程化定义：
+  <em>一个 Agent 是 LLM 在循环中动态决定要不要调用工具、调用什么工具的系统</em>。
+  关键词是"循环"和"动态决定"。我们在第 2 章会精确化这个定义并对照 Workflow 加以区分。
+</div>
+
+<h2 class="section"><span class="secnum">1.2</span>LLM 之前的 Agent (1956 – 2022 简史)</h2>
+
+<p>
+  把这段历史压缩到一页纸是欺骗读者，但本书重点是 LLM 时代的工程，前史一带而过：
+</p>
+
+<h3>1956–1980：符号主义 Agent</h3>
+
+<p>
+  达特茅斯会议奠定 AI 学科。早期的 Agent 是<em>专家系统</em>——一堆 if-then 规则
+  + 推理引擎。1965 年的 ELIZA 是第一个能跟人聊天的程序，本质是字符串模式匹配。
+  没有"学习"，规则全靠人写。
+</p>
+
+<h3>1980–2010：BDI、Subsumption、强化学习起步</h3>
+
+<p>
+  Rodney Brooks 1986 年的 <em>Subsumption Architecture</em> 让机器人 agent 抛弃中央
+  规划器，用分层的反应式行为堆叠。Belief-Desire-Intention (BDI) 模型把 agent 形式化为
+  "信念-愿望-意图"三元组。同期 RL 兴起：Q-learning（1989）、TD-learning。
+</p>
+
+<h3>2010–2022：深度强化学习黄金期</h3>
+
+<p>
+  Atari DQN (2013)、AlphaGo (2016)、StarCraft II 的 AlphaStar (2019)、
+  OpenAI Five 在 Dota 上击败人类。但这些 agent 的"目标"由奖励函数硬定义，
+  环境是封闭游戏，泛化能力有限。它们能下棋但不能<em>"帮我写个 commit"</em>。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Background</div>
+  <div class="ref-title">Russell &amp; Norvig: Artificial Intelligence — A Modern Approach (4th ed., 2020)</div>
+  <div class="ref-meta">教科书 · 第二章把 agent 形式化为 (percept → action) 的函数</div>
+  <p>
+    如果你想正经回顾 LLM 之前的 agent 理论，第 2 章对 agent 的形式化定义、
+    第 17–22 章关于规划与多 agent 的内容仍然有效。
+    但本书后面不再回到这些抽象层——LLM 时代有自己的工程惯例。
+  </p>
+</div>
+
+<h2 class="section"><span class="secnum">1.3</span>ReAct：2022 年的关键论文</h2>
+
+<p>
+  时间线突然来到 2022 年 10 月。Princeton 和 Google 的 Yao 等人发表了 ReAct
+  (<em>Synergizing Reasoning and Acting in Language Models</em>)。这篇论文之于
+  现代 Agent，相当于<em>给 LLM 加上手脚</em>的奠基工作。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Foundational Paper</div>
+  <div class="ref-title">ReAct: Synergizing Reasoning and Acting in Language Models</div>
+  <div class="ref-meta">Yao et al. · arXiv:2210.03629 · ICLR 2023</div>
+  <p>
+    核心想法：让 LLM 交替生成"Thought"（推理）和"Action"（动作），
+    动作执行结果作为下一轮 prompt 的一部分。这套
+    <code>Thought → Action → Observation → Thought → ...</code> 循环，
+    就是今天所有 LLM Agent 的祖宗。
+  </p>
+</div>
+
+<h3>ReAct 的 prompt 长什么样</h3>
+
+<p>读懂这个 prompt，你就懂了为什么后来的 Function Calling 是它的"工程化升级版"：</p>
+
+<pre><code><span class="c"># ReAct 的经典 few-shot prompt（节选）</span>
+Question: What is the elevation range for the area that the eastern
+sector of the Colorado orogeny extends into?
+
+Thought 1: I need to search Colorado orogeny, find the area that the
+eastern sector extends into, then find the elevation range.
+Action 1: Search[Colorado orogeny]
+Observation 1: The Colorado orogeny was an episode of mountain building
+(an orogeny) in Colorado and surrounding areas.
+
+Thought 2: It does not mention the eastern sector. So I need to look up
+"eastern sector".
+Action 2: Lookup[eastern sector]
+Observation 2: (Result 1 / 1) The eastern sector extends into the High Plains...
+
+Thought 3: The eastern sector of Colorado orogeny extends into the High Plains.
+I need to search High Plains and find its elevation range.
+Action 3: Search[High Plains]
+...
+</code></pre>
+
+<p>
+  注意几个细节：
+</p>
+
+<ul>
+  <li>"Action" 是用<em>纯文本</em>表达的：<code>Search[xxx]</code>、<code>Lookup[yyy]</code>。
+      框架解析这段文本，提取动作名和参数，调用实际工具。</li>
+  <li>"Observation" 也是用纯文本插回 prompt——没有标准化的 message role。</li>
+  <li>整个交互通过"补全"实现：LLM 生成下一段，框架截到 <code>Action N: ...</code>
+      就停下来执行工具，再把结果以 <code>Observation N: ...</code> 拼回去继续补全。</li>
+</ul>
+
+<p>
+  ReAct 的精神在 Hermes 里仍然在——只是工具调用从"纯文本解析"升级成了
+  <em>OpenAI 标准的 function calling 协议</em>（结构化 JSON）。整个循环骨架完全没变：
+</p>
+
+<pre class="mermaid">
+flowchart LR
+  subgraph React["ReAct &nbsp;(2022)"]
+    R1["Thought<br/><i>text</i>"]
+    R2["Action<br/><i>text parse</i>"]
+    R3["Observation<br/><i>text</i>"]
+    R4["loop until<br/>no Action"]
+    R1 --> R2 --> R3 --> R1
+    R3 -.-> R4
+  end
+  subgraph Hermes["Hermes &nbsp;(2026)"]
+    H1["Assistant message<br/><i>text + tool_calls</i>"]
+    H2["tool_calls<br/><i>JSON</i>"]
+    H3["tool message<br/><i>JSON</i>"]
+    H4["loop until<br/>no tool_calls"]
+    H1 --> H2 --> H3 --> H1
+    H3 -.-> H4
+  end
+  React ==>|"工程化"| Hermes
+  classDef accent fill:#fbfaf6,stroke:#8b1538,color:#8b1538
+  class H2,H3 accent
+</pre>
+
+<p>
+  这种思想上的连续性，是我让你先看 ReAct 的原因——读 Hermes 的 <code>conversation_loop.py</code>
+  时，你会一直在心里翻译成"哦这就是 ReAct 的 thought-action-observation 三件套"。
+</p>
+
+<h2 class="section"><span class="secnum">1.4</span>AutoGPT 时刻（2023 春）</h2>
+
+<p>
+  2023 年 3 月底，<em>AutoGPT</em> 在 GitHub 上线，三周冲到 100k star。它的
+  pitch 是<em>"给 LLM 一个目标，它会自己规划、执行、迭代"</em>。一时间 Twitter 上
+  全是"我让 AutoGPT 帮我开公司"的截图。
+</p>
+
+<p>但 AutoGPT 几乎不能干任何真事。它的失败模式很经典：</p>
+
+<ol>
+  <li><strong>无限循环</strong>：LLM 想出一个子任务，开始执行，结果不好，调整目标，又生成新子任务。</li>
+  <li><strong>幻觉行动</strong>：执行了不存在的命令，把假结果当真，继续向前。</li>
+  <li><strong>资源燃烧</strong>：一个简单任务跑掉 50 美元 token。</li>
+  <li><strong>无记忆</strong>：每次循环重读所有历史，context 很快爆炸。</li>
+</ol>
+
+<div class="callout warn">
+  <span class="label">教训</span>
+  AutoGPT 的失败暴露了三个工程问题——
+  <strong>循环控制</strong>（怎么停）、<strong>错误传播</strong>（一步错全错）、
+  <strong>记忆管理</strong>（哪些该记哪些该忘）。这三个问题至今没有彻底解决，
+  Hermes 的代码里处处是对这三个问题的处理。
+</div>
+
+<p>
+  但 AutoGPT 的<em>市场教育</em>价值巨大：它让全世界一夜之间相信"LLM + 工具 + 循环"
+  这条路。BabyAGI、AgentGPT、GPT-Engineer 接踵而至。LangChain 借此推出
+  <code>AgentExecutor</code> 抽象，把 ReAct prompt 模板化。
+</p>
+
+<h2 class="section"><span class="secnum">1.5</span>工业化阶段 (2023–2024)</h2>
+
+<p>
+  2023 下半年开始，行业进入"擦屁股"阶段——把 AutoGPT 留下的烂摊子修干净。
+</p>
+
+<h3>OpenAI Function Calling (2023 年 6 月)</h3>
+
+<p>
+  GPT-3.5/4 加上 <code>functions</code> 参数（后改名 <code>tools</code>），
+  从 API 层面支持结构化工具调用。从此 LLM 输出工具调用<em>不再依赖 prompt 模板，
+  而是 protocol-level 保证</em>。模型微调过、被训练成会返回 well-formed JSON。
+  ReAct 的"解析 Action 字符串"成为历史。
+</p>
+
+<pre><code><span class="c"># 现代 function calling API</span>
+response = client.chat.completions.create(
+    model=<span class="s">"gpt-4o"</span>,
+    messages=[...],
+    tools=[
+        {
+            <span class="s">"type"</span>: <span class="s">"function"</span>,
+            <span class="s">"function"</span>: {
+                <span class="s">"name"</span>: <span class="s">"web_search"</span>,
+                <span class="s">"parameters"</span>: { <span class="c">/* JSON schema */</span> }
+            }
+        }
+    ]
+)
+<span class="c"># response.choices[0].message.tool_calls 是结构化 JSON</span>
+</code></pre>
+
+<p>Hermes 全栈构建在这个协议上。所有 LLM provider 都被适配成 OpenAI 兼容协议。</p>
+
+<h3>LangChain / LlamaIndex 框架化 (2023)</h3>
+
+<p>
+  这两个框架试图给 Agent 加上"工程化"的抽象：Memory class、VectorStore、
+  RetrievalQA、AgentExecutor、Toolkit……结果是<em>过度抽象</em>。
+  Anthropic 在 2024 年底的博客里直接吐槽：
+</p>
+
+<blockquote>
+  "Frameworks make it easy to get started, but they often add layers of
+  abstraction that can obscure the underlying prompts and responses,
+  making them harder to debug."
+  <footer>Anthropic · Building Effective Agents · 2024-12</footer>
+</blockquote>
+
+<p>
+  从 2024 年起业界共识转向<strong>"少抽象、多代码"</strong>。
+  Hermes 也是这条路线——它没有 LangChain 风格的 <code>Agent</code> / <code>Chain</code>
+  / <code>Memory</code> 基类层叠。所有逻辑都在 <code>conversation_loop.py</code> 一个
+  长函数里展开，方便审计和调试。
+</p>
+
+<h3>Anthropic Computer Use (2024 年 10 月)</h3>
+
+<p>
+  Claude 3.5 Sonnet 公测 <em>computer use</em>——能直接看屏幕截图、移动鼠标、
+  敲键盘。这次第一次让"Agent 真的能做任意 GUI 任务"从 demo 变成普通 API。
+  虽然准确率不高，但开启了多模态 Agent 的窗口。
+</p>
+
+<h3>OpenAI Assistants API → 退场 (2023–2025)</h3>
+
+<p>
+  OpenAI 2023 年底推了 Assistants API，想把"thread + tool + retrieval"
+  做成托管服务。但 2025 年它被官方标记为 deprecated，转而推 Agents SDK，
+  原因是<em>开发者不希望 state 在 OpenAI 那边、调试体验差</em>。这个挫折让行业意识到：
+  <strong>Agent 的状态必须在你自己手里</strong>。
+</p>
+
+<h2 class="section"><span class="secnum">1.6</span>标准化与协议层 (2024+)</h2>
+
+<h3>MCP — Model Context Protocol (2024 年 11 月)</h3>
+
+<p>
+  Anthropic 在 2024 年 11 月发布 <em>Model Context Protocol</em>。这是
+  Agent 历史上一个关键转折——它把<em>工具的接入</em>标准化了。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Industry Protocol</div>
+  <div class="ref-title">Model Context Protocol (MCP)</div>
+  <div class="ref-meta">Anthropic · 2024-11 · modelcontextprotocol.io</div>
+  <p>
+    MCP 是一个开放标准，定义了三种角色：<strong>Host</strong>（Agent 应用，比如
+    Claude Desktop / Cursor / Hermes）、<strong>Client</strong>（host 内部
+    与 server 通信的库）、<strong>Server</strong>（暴露工具/资源/prompts 的
+    外部进程，比如 GitHub MCP server、Slack MCP server）。
+  </p>
+  <p>
+    协议本身基于 JSON-RPC，定义了工具发现、调用、资源读取、prompts 模板四类
+    标准 RPC。Anthropic 从 day-one 开源协议，Microsoft / OpenAI / Google
+    DeepMind 在 2025 年陆续宣布支持。到 2026 年它已经事实成为<em>工具接入的 USB-C</em>。
+  </p>
+</div>
+
+<p>对 Hermes 的意义：Hermes 支持作为 MCP host 接入任意 MCP server。
+   这意味着只要市面上有个 GitHub MCP server，Hermes 立刻拿到 GitHub 工具集——
+   不用 Hermes 自己写。第 7 章会讲 Hermes 怎么处理 MCP 工具的注册与刷新。</p>
+
+<h3>Anthropic "Building Effective Agents" (2024 年 12 月)</h3>
+
+<p>
+  这篇博客是 2024 年最被引用的 Agent 工程指南。核心观点：</p>
+
+<ul>
+  <li>把系统分成两类：<strong>Workflow</strong>（LLM 在预定义代码路径里被编排）
+      和 <strong>Agent</strong>（LLM 自己决定下一步）。</li>
+  <li>大多数任务用 Workflow 就够了。Agent 只在"任务复杂度未知"时才需要。</li>
+  <li>核心构建块是 <em>augmented LLM</em>：LLM + retrieval + tools + memory。
+      所有更复杂的模式都是它的组合。</li>
+  <li>列出 5 种经典模式：Prompt Chaining、Routing、Parallelization、
+      Orchestrator-Workers、Evaluator-Optimizer。</li>
+</ul>
+
+<p>第 2 章我们会展开这个分类。Hermes 是典型的 Agent，但内部用了多个 Workflow 模式。</p>
+
+<h3>Anthropic Context Engineering (2025)</h3>
+
+<p>
+  到 2025 年中 Anthropic 提出"context engineering 取代 prompt engineering"。
+  核心问题：长任务下 context 窗口会满，怎么管理？他们的答案有三招：</p>
+
+<ol>
+  <li><strong>Compaction</strong>：当 context 接近窗口上限时，让 LLM 总结当前会话，
+      用总结开启新窗口。Hermes 第 5 章会看到一模一样的机制。</li>
+  <li><strong>Just-in-time context</strong>：不预加载所有信息，而是把"指针"
+      （文件路径、ID）放在 context 里，需要时调工具拉。</li>
+  <li><strong>Tool result clearing</strong>：把旧的工具调用结果清掉，只留
+      assistant 总结。最近 Anthropic 把它做成了 API 一级功能。</li>
+</ol>
+
+<h3>SWE-Bench Verified 成为黄金标尺 (2024)</h3>
+
+<p>
+  OpenAI 在 2024 年 8 月推出 <em>SWE-Bench Verified</em>——500 个被人工核对过、
+  确认可解的真实 GitHub issue。从此"代码 Agent 强不强"有了客观标尺。
+  2026 年初的最强分数（Claude Opus 4.5）是 80.9%。</p>
+
+<table>
+  <thead>
+    <tr><th>系统</th><th>底层模型</th><th>SWE-Bench Verified</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Claude Opus 4.5 / 4.6 / 4.7</td><td>自家</td><td>80.9% / 80.8% / 80%+</td></tr>
+    <tr><td>GPT-5.2</td><td>自家</td><td>80.0%</td></tr>
+    <tr><td>Cursor (Sonnet 4.6)</td><td>Anthropic</td><td>65.7%</td></tr>
+    <tr><td>Devin 2.0</td><td>自家 + GPT</td><td>45.8%</td></tr>
+  </tbody>
+</table>
+
+<div class="callout research">
+  <span class="label">研究启示</span>
+  Anthropic 自己强调：<em>同一个底层模型，不同 harness（脚手架）可以差 15+ 个百分点</em>。
+  这意味着 Agent 工程的价值不止"调好 prompt"——你的 loop、工具集、上下文管理
+  决定了模型实际能发挥多少。这就是本书的核心论点：
+  <strong>Agent 工程是和模型同等重要的一层</strong>，Hermes 是这一层的样本。
+</div>
+
+<h2 class="section"><span class="secnum">1.7</span>2025–2026 的三件大事</h2>
+
+<p>
+  本书写作于 2026 年 5 月。从 2024 年底到现在又发生了三件让 Agent 工程发生重大变化的事，
+  值得单独标出来——它们是<em>"教科书化"</em>正在发生的现场。
+</p>
+
+<h3>① Skill 标准化 (2025.12)</h3>
+
+<p>
+  Anthropic 把 SKILL.md 格式作为<em>开放标准</em>发布。OpenAI 在两周内宣布 Codex CLI 和
+  ChatGPT 采用同一格式。这是 MCP 之后第二个跨厂家 Agent 标准。
+  Hermes 的内部约定突然变成行业标准——本书第 8 章会专门讲。
+</p>
+
+<h3>② Reasoning Model 全面铺开 (2025–2026)</h3>
+
+<p>
+  2024.09 OpenAI o1 单点突破，2025.01 DeepSeek-R1 把 reasoning training 方法
+  （GRPO）开源给世界——之后每家都发了 reasoning model。到 2026 年 5 月，
+  Claude Opus 4.7、GPT-5.2、DeepSeek-R2、Qwen Thinking、Kimi Reasoning 都进入主流。
+  对 Agent 工程的影响：<em>很多边界处理（幻觉工具名、JSON 错、空响应）开始被训进模型本身</em>，
+  harness 代码长期会变薄。
+</p>
+
+<h3>③ Multi-Agent Framework 大洗牌 (2025–2026)</h3>
+
+<p>
+  OpenAI Swarm 在 2025.03 archive，转推 Agents SDK；Microsoft AutoGen 在 2026 初转
+  maintenance mode，新的 Microsoft Agent Framework (MAF) 1.0 在 2026.04 接班；
+  LangGraph 仍是生产级首选。整个领域共识：<em>少 framework，多代码</em>。
+  这也是本书选 Hermes 作为教材的原因——它走的就是这条路。
+</p>
+
+<h3>三件事的共同主题</h3>
+
+<p>
+  把三件事串起来：<em>Agent 工程从"用框架包装能力"走向"把能力变成开放标准 + 训进模型"</em>。
+  框架的角色被压缩；标准（MCP / Skill）和模型本身的能力放大。
+  Hermes 作为 2026 年的样本，正是这个新平衡的产物——
+  没有臃肿框架抽象，但把所有现代标准接口都做完。
+</p>
+
+<h2 class="section"><span class="secnum">1.8</span>Hermes 站在什么位置</h2>
+
+<p>把上面的时间线压成一张图：</p>
+
+<pre class="mermaid">
+timeline
+  title Agent 时代关键节点
+  section LLM 之前
+    1956-2022 : 符号 AI / 专家系统 / BDI / 深度强化学习
+  section 2022 — 萌芽
+    2022.10 : ReAct 论文 (thought-action-observation 循环)
+    2022.11 : ChatGPT 发布
+  section 2023 — 泡沫与基建
+    2023.03 : AutoGPT 泡沫
+    2023.05 : Voyager (skill library)
+    2023.06 : OpenAI Function Calling
+    2023.10 : MemGPT (分层记忆)
+  section 2024 — 标准化
+    2024.10 : Anthropic Computer Use
+    2024.11 : MCP 发布 (工具协议)
+    2024.12 : Anthropic Building Effective Agents
+  section 2025 — 上下文工程
+    2025.06 : Context Engineering 系列
+    2025.10 : SWE-Bench 80%+ (代码 Agent 实用化)
+  section 2026 — 集大成
+    2026.05 : Hermes Agent : 集成 OpenAI 协议 + MCP + harness : 30 provider + 20 平台
+</pre>
+
+<p>
+  Hermes 不是一个"突破性研究"系统——它的价值是<em>把过去三年 Agent 工程的最佳
+  实践整合成一个能跑、能改、能学的开源项目</em>。每一个设计决策背后都对应一段
+  或者几段历史教训。这是为什么这本书值得写：
+  <strong>看 Hermes 就是看 2022–2026 这段时期 Agent 工程的全部沉淀</strong>。
+</p>
+
+<h3>Hermes 的定位</h3>
+
+<table>
+  <thead>
+    <tr><th>维度</th><th>Hermes 的选择</th><th>为什么</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>架构</td>
+      <td>单进程、不分布式、状态本地</td>
+      <td>避免 OpenAI Assistants 那种"状态在云端"的调试痛点</td>
+    </tr>
+    <tr>
+      <td>抽象层</td>
+      <td>少 — 直接的 while 循环 + 工具字典</td>
+      <td>遵循 Anthropic "less abstraction" 共识</td>
+    </tr>
+    <tr>
+      <td>工具系统</td>
+      <td>本地工具 + MCP server 双轨</td>
+      <td>本地工具控制力强；MCP 提供生态</td>
+    </tr>
+    <tr>
+      <td>模型</td>
+      <td>OpenAI 兼容协议 + 30 个 provider profile</td>
+      <td>不锁厂家、不锁模型</td>
+    </tr>
+    <tr>
+      <td>记忆</td>
+      <td>Skill (程序性) + Memory (情景) + Curator (维护)</td>
+      <td>融合 Voyager + MemGPT + Generative Agents 的范式</td>
+    </tr>
+    <tr>
+      <td>多面</td>
+      <td>CLI + 20 个聊天平台共享同一核心</td>
+      <td>用户体验跨设备一致</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>本章带走的</h3>
+
+<ul>
+  <li>"Agent" 在不同语境下含义不同，本书谈的是 LLM 时代的工程化 Agent。</li>
+  <li>2022 年 ReAct 论文奠定了"思考-行动-观察"循环，至今未变。</li>
+  <li>2023 年 AutoGPT 暴露了三个工程问题：循环控制、错误传播、记忆管理——本书后面所有章节都在回应这三个问题。</li>
+  <li>2024 年起行业进入标准化阶段：OpenAI tools、MCP、Anthropic 的工程指南。</li>
+  <li>Hermes 是 2026 年这条线上的<em>工程集大成品</em>，它的代码值得当 textbook 读。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      用一句话总结 ReAct 和 OpenAI Function Calling 的关系。提示：协议层 vs 思想层。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      AutoGPT 失败的三个工程问题里，哪个你认为最难解决？为什么？
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      读 Anthropic <em>Building Effective Agents</em> 原文（2024-12），列出它说的 5 种模式，
+      并各举一个你熟悉的现实例子（不必和 LLM 相关）。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      查阅 MCP 的官方文档 <a href="https://modelcontextprotocol.io/specification">modelcontextprotocol.io</a>，
+      画出 Host / Client / Server 三角，把 Hermes、VS Code、GitHub MCP Server 分别放进去。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      如果让你给 SWE-Bench Verified 设计一个新的"15 个百分点突破"——固定模型，只能改
+      harness——你会从哪个方向下手？写 200 字思路。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev disabled" href="#">
+    <div class="direction">← 上一章</div>
+    <div class="title">（已经是第一章）</div>
+  </a>
+  <a class="next" href="ch02-mental-model.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 2 章 · 心智模型</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

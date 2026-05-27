@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 章 · run_conversation 深度解剖 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part II · 核心循环
+  <span class="sep">›</span>
+  第 3 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 03</div>
+  <h1>run_conversation 深度解剖</h1>
+  <p class="chapter-subtitle">3800 行的一个 while 循环里到底装了什么。
+    我们从最干净的 13 行开始，逐层加回工程现实。</p>
+  <div class="meta">
+    <span>本章约 8,200 字</span>
+    <span>阅读 ~35 分钟</span>
+    <span>关键词：agent loop · budget · interrupt · retry · streaming</span>
+  </div>
+</div>
+
+<p class="lead">
+  本书的中心章节。打开 Hermes 的 <code>agent/conversation_loop.py</code>，从 232 行到
+  3821 行，是<em>一个函数</em>——<code>run_conversation()</code>。3589 行。一个 while 循环。
+  把整个 Agent 的灵魂都装在这里。
+</p>
+
+<p>
+  这一章我们做一件事：<strong>把这 3589 行剥成 13 行精髓，然后一层一层把工程现实加回来</strong>。
+  读完你应该明白每一层为什么必须加，以及加错了会出什么 bug。
+</p>
+
+<h2 class="section"><span class="secnum">3.1</span>13 行精髓</h2>
+
+<p>把 ReAct 循环写成最干净的 Python，长这样：</p>
+
+<pre><code><span class="c"># Agent 循环的最干净版本</span>
+<span class="k">def</span> <span class="f">run_conversation</span>(user_message, messages, tools, max_iter=<span class="num">30</span>):
+    messages.<span class="f">append</span>({<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: user_message})
+
+    <span class="k">for</span> _ <span class="k">in</span> <span class="f">range</span>(max_iter):
+        response = llm.<span class="f">chat</span>(messages, tools=tools)
+        messages.<span class="f">append</span>(response.message)
+
+        <span class="k">if</span> response.message.tool_calls:
+            <span class="k">for</span> call <span class="k">in</span> response.message.tool_calls:
+                result = <span class="f">execute_tool</span>(call.name, call.args)
+                messages.<span class="f">append</span>({<span class="s">"role"</span>: <span class="s">"tool"</span>,
+                                 <span class="s">"tool_call_id"</span>: call.id,
+                                 <span class="s">"content"</span>: result})
+        <span class="k">else</span>:
+            <span class="k">return</span> response.message.content
+</code></pre>
+
+<p>这 13 行能跑。它就是 ReAct loop 的最小可执行实现。但你把它扔到生产环境，
+   会立刻撞上以下问题。我们按问题分组加回代码。</p>
+
+<div class="callout tip">
+  <span class="label">阅读建议</span>
+  打开 <code>hermes-agent/agent/conversation_loop.py</code>。我会标注每个问题对应的代码区间，
+  你随时切到 IDE 对照看。整章的目标是<em>"把代码读出来"而不是"把代码再写一遍"</em>。
+</div>
+
+<h2 class="section"><span class="secnum">3.2</span>问题一：循环不能跑到死</h2>
+
+<p>
+  上面 13 行有 <code>max_iter</code> 上限，看起来 OK。但有几个坑：
+</p>
+
+<ol>
+  <li>如果<em>最后一次循环</em>是 tool_calls，工具结果加进去就跳出，LLM 从来没机会"看到结果并答用户"——用户拿到的是沉默。</li>
+  <li><code>max_iter</code> 是按"次"算的，但有的 turn 可能要 5 次工具调用，有的要 50 次。固定数字不够灵活。</li>
+  <li>多个并发 turn 共用一个预算池怎么办？</li>
+</ol>
+
+<h3>Hermes 的解法：IterationBudget + Grace Call</h3>
+
+<p>看 Hermes 的实际代码（行号近似）：</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:644-669</span>
+<span class="c"># 真实的循环条件</span>
+<span class="k">while</span> (api_call_count <span class="k">&lt;</span> agent.max_iterations
+        <span class="k">and</span> agent.iteration_budget.remaining <span class="k">&gt;</span> <span class="num">0</span>) \
+        <span class="k">or</span> agent._budget_grace_call:
+
+    agent._checkpoint_mgr.<span class="f">new_turn</span>()
+
+    <span class="k">if</span> agent._interrupt_requested:
+        interrupted = <span class="k">True</span>
+        _turn_exit_reason = <span class="s">"interrupted_by_user"</span>
+        <span class="k">if</span> <span class="k">not</span> agent.quiet_mode:
+            agent.<span class="f">_safe_print</span>(<span class="s">"\n⚡ Breaking out of tool loop due to interrupt..."</span>)
+        <span class="k">break</span>
+
+    api_call_count <span class="k">+=</span> <span class="num">1</span>
+    agent._api_call_count = api_call_count
+    agent.<span class="f">_touch_activity</span>(<span class="f">f</span><span class="s">"starting API call #{api_call_count}"</span>)
+
+    <span class="c"># Grace call: 预算耗尽但给一次宽限。消耗这个 flag。</span>
+    <span class="k">if</span> agent._budget_grace_call:
+        agent._budget_grace_call = <span class="k">False</span>
+    <span class="k">elif</span> <span class="k">not</span> agent.iteration_budget.<span class="f">consume</span>():
+        _turn_exit_reason = <span class="s">"budget_exhausted"</span>
+        <span class="k">if</span> <span class="k">not</span> agent.quiet_mode:
+            agent.<span class="f">_safe_print</span>(
+                <span class="f">f</span><span class="s">"\n⚠️ Iteration budget exhausted "</span>
+                <span class="f">f</span><span class="s">"({agent.iteration_budget.used}/"</span>
+                <span class="f">f</span><span class="s">"{agent.iteration_budget.max_total} iterations used)"</span>)
+        <span class="k">break</span>
+</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 3.1</span> 循环入口的预算与中断检查</div>
+
+<h4>IterationBudget 这个抽象</h4>
+
+<p>
+  <code>IterationBudget</code> 是一个共享对象，跨多个 subagent 也算同一份预算。
+  它有 <code>max_total</code>、<code>used</code>、<code>remaining</code> 三个属性，
+  以及一个 <code>consume()</code> 方法：减 1，返回 True；如果已经为 0，返回 False。
+</p>
+
+<p>
+  为什么不直接用 <code>api_call_count &lt; max_iterations</code>？因为 Hermes 有
+  <em>delegate_task</em> 工具：父 Agent 可以派子 Agent，子 Agent 在自己的循环里也消费 token。
+  如果预算是各 Agent 独立计数，父 Agent 派 10 个子 Agent 就能用 10 倍预算——失控。
+  共享预算池强制全树总量受控。
+</p>
+
+<h4>Grace Call 详解</h4>
+
+<p>关键的 4 行：</p>
+
+<pre><code><span class="k">if</span> agent._budget_grace_call:
+    agent._budget_grace_call = <span class="k">False</span>      <span class="c"># 这次用掉</span>
+<span class="k">elif</span> <span class="k">not</span> agent.iteration_budget.<span class="f">consume</span>():
+    <span class="c">## 第一次预算耗尽 — 退出</span>
+    <span class="k">break</span></code></pre>
+
+<p>但等等——这里看不到 <code>_budget_grace_call = True</code> 在哪儿设置？答案在
+   循环之外，<em>budget 耗尽时的退出后处理</em>逻辑里。简化版：</p>
+
+<pre><code><span class="c"># 循环外（不在 conversation_loop 主体）</span>
+<span class="k">if</span> _turn_exit_reason == <span class="s">"budget_exhausted"</span>:
+    <span class="c"># 检查最后一条消息是 assistant(with tool_calls) → tool</span>
+    <span class="c"># 如果是，让模型有一次"收尾"的机会</span>
+    <span class="k">if</span> messages[-<span class="num">1</span>][<span class="s">"role"</span>] == <span class="s">"tool"</span>:
+        agent._budget_grace_call = <span class="k">True</span>
+        <span class="c"># 重新进入循环 ↑</span>
+</code></pre>
+
+<p>
+  效果：第一次撞预算上限，立刻 break。但发现最后挂着 tool 消息，模型还没说话——
+  <em>设 grace flag，重新进 while</em>。这次因为 grace flag 是 True，循环条件成立，
+  允许再一次 API call。但 grace flag 会被消耗，下次循环再撞预算就真的退出了。
+</p>
+
+<div class="callout">
+  <span class="label">为什么不直接 max_iterations += 1</span>
+  Grace call 和"多给一次"的区别是<em>语义化</em>：grace call 只在"模型还没说话就被截断"
+  时触发。如果模型已经返回文本（最后一条 message 是 assistant 文本），不需要 grace。
+  这避免无意义的 token 浪费。
+</div>
+
+<h2 class="section"><span class="secnum">3.3</span>问题二：中途打断怎么办</h2>
+
+<p>
+  Agent 在跑一个长任务时，用户改主意了，发了新消息。你不能让用户等当前 turn 跑完
+  才被听见。Hermes 的方案——一个布尔 flag：
+</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:649-654</span>
+<span class="k">if</span> agent._interrupt_requested:
+    interrupted = <span class="k">True</span>
+    _turn_exit_reason = <span class="s">"interrupted_by_user"</span>
+    <span class="k">break</span>
+</code></pre>
+
+<p>三个细节值得注意：</p>
+
+<ol>
+  <li><strong>Flag 在每轮循环开头检查一次</strong>——开销极小。不是用 signal 中断，
+      不是用 threading.Event 阻塞。最低成本的轮询。</li>
+  <li><strong>不是 abort 信号</strong>。如果你正在执行某个工具（比如 <code>terminal</code> 跑一个长命令），
+      Hermes <em>不杀进程</em>。它等当前工具完成、把结果记进 messages、然后跳出。
+      这样消息历史不会破损（不会出现"有 tool_call 但没有对应 tool result"的局面）。</li>
+  <li><strong>Flag 由谁设置</strong>？UI 层。CLI 里按 <kbd>Ctrl+C</kbd>、Gateway 里收到
+      新消息、TUI 里检测到键盘事件——都会把这个 flag 设为 True。线程安全靠 Python GIL。</li>
+</ol>
+
+<h3>更深层的打断：流式中</h3>
+
+<p>
+  上面 flag 只在循环顶部检查。如果一个 API call 本身要 30 秒呢？Hermes 用
+  <em>interruptible streaming</em>：
+</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:1141-1145</span>
+<span class="k">if</span> stream_callback:
+    response = agent.<span class="f">_interruptible_streaming_api_call</span>(...)
+<span class="k">else</span>:
+    response = agent.<span class="f">_interruptible_api_call</span>(api_kwargs)
+</code></pre>
+
+<p>这两个方法的内部用 yield 推迭代器，每收到一个 token 就检查 interrupt flag。
+   被打断时<em>就地停止</em>，已经收到的部分文本作为 partial 响应保留下来（章 3.7 会用到）。</p>
+
+<h2 class="section"><span class="secnum">3.4</span>问题三：消息历史预处理</h2>
+
+<p>
+  伪代码里 <code>messages</code> 是干净的 list of dict。生产里完全不是。每次 API call 前 messages
+  要经过<em>大量预处理</em>——拼接、清洗、规范化、加缓存标记。
+</p>
+
+<p>看 conversation_loop 第 755–922 行的核心步骤：</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:755-922 (摘要)</span>
+<span class="c"># 1. 构造 api_messages（不是直接传 agent._session_messages）</span>
+api_messages = agent._session_messages.<span class="f">copy</span>()
+
+<span class="c"># 2. 拼接 system prompt（三层 — 第 5 章详解）</span>
+effective_system = agent.<span class="f">_build_system_prompt</span>(
+    system_message=system_message, refresh_volatile=<span class="k">True</span>)
+api_messages = [{<span class="s">"role"</span>: <span class="s">"system"</span>,
+                  <span class="s">"content"</span>: effective_system}] + api_messages
+
+<span class="c"># 3. Prompt cache 注解（Anthropic specific）</span>
+<span class="k">if</span> agent.<span class="f">_provider_supports_cache_control</span>():
+    api_messages = agent.<span class="f">_annotate_cache_breakpoints</span>(api_messages)
+
+<span class="c"># 4. 清洗 surrogate 字符（Unicode 代理对处理）</span>
+api_messages = <span class="f">_sanitize_surrogates</span>(api_messages)
+
+<span class="c"># 5. 工具结果的尺寸限制（避免一条 tool result 撑爆 context）</span>
+api_messages = agent.<span class="f">_truncate_tool_results</span>(api_messages)
+
+<span class="c"># 6. 标准化空白字符（KV cache 一致性 — 多余空格会破缓存）</span>
+api_messages = <span class="f">_normalize_whitespace</span>(api_messages)</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 3.2</span> messages 在送入 API 前要经过的预处理流水线</div>
+
+<p>每步都值得展开，但我们重点看两个反直觉的：</p>
+
+<h3>缓存标记（cache_control）</h3>
+
+<p>
+  Anthropic 的 prompt cache 是<em>显式</em>的——你要在消息上加 <code>cache_control</code>
+  标记告诉 API "请缓存到这里"。Hermes 自动在<em>合适的位置</em>标记：
+</p>
+
+<ul>
+  <li>System prompt 末尾</li>
+  <li>第一条非空 user message 末尾</li>
+  <li>tools schema 之后</li>
+</ul>
+
+<p>
+  细节太多，我们第 5 章专章讲。这里只要知道：<em>messages 不是原样发给 API 的</em>。
+</p>
+
+<h3>Tool Result 截断</h3>
+
+<p>
+  如果工具返回一个 200 KB 的 HTML 页面，原样塞进 context 立刻爆炸。Hermes 给每个工具
+  注册时可以设 <code>max_result_size_chars</code>。超过的部分被截断，加一行
+  <code>"[Output truncated; original was N chars]"</code> 提示。
+</p>
+
+<div class="callout warn">
+  <span class="label">陷阱</span>
+  截断发生在<em>把 messages 传给 LLM 之前</em>，但 <code>agent._session_messages</code> 里
+  保留的是原始结果。如果你想做 session search 或保存 trajectory，看到的是<em>完整结果</em>；
+  但 LLM 看到的是截断版。这种"双视图"是 Agent 工程里常见的模式。
+</div>
+
+<h2 class="section"><span class="secnum">3.5</span>问题四：工具调用校验</h2>
+
+<p>
+  LLM 不是完美的。Function calling 会出三种错：
+</p>
+
+<ol>
+  <li><strong>幻觉工具名</strong>：调一个根本没注册的工具。</li>
+  <li><strong>JSON 截断</strong>：arguments 写到一半被 max_tokens 切断。</li>
+  <li><strong>JSON 语法错</strong>：模型生成的 JSON 不合法。</li>
+</ol>
+
+<p>每种都得单独处理。Hermes 在 conversation_loop 3254–3389 行用一个分层 retry：</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:3254-3305 (简化)</span>
+<span class="k">if</span> response.tool_calls:
+    invalid = [tc.function.name <span class="k">for</span> tc <span class="k">in</span> response.tool_calls
+               <span class="k">if</span> tc.function.name <span class="k">not</span> <span class="k">in</span> agent.valid_tool_names]
+
+    <span class="k">if</span> invalid:
+        agent._invalid_tool_retries <span class="k">+=</span> <span class="num">1</span>
+        <span class="k">if</span> agent._invalid_tool_retries <span class="k">&gt;=</span> <span class="num">3</span>:
+            <span class="k">return</span> {<span class="s">"error"</span>: <span class="s">"Model keeps generating invalid tool calls"</span>}
+
+        <span class="c"># 关键：把错误回传给模型，让它自己改正</span>
+        messages.<span class="f">append</span>(response.message)
+        <span class="k">for</span> tc <span class="k">in</span> response.tool_calls:
+            <span class="k">if</span> tc.function.name <span class="k">not</span> <span class="k">in</span> agent.valid_tool_names:
+                messages.<span class="f">append</span>({
+                    <span class="s">"role"</span>: <span class="s">"tool"</span>,
+                    <span class="s">"tool_call_id"</span>: tc.id,
+                    <span class="s">"content"</span>: <span class="f">f</span><span class="s">"Tool '{tc.function.name}' does not exist. "</span>
+                               <span class="f">f</span><span class="s">"Available: {sorted(agent.valid_tool_names)}"</span>,
+                })
+        <span class="k">continue</span>   <span class="c"># 让模型基于错误信息再生成</span>
+</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 3.3</span> 幻觉工具名的处理</div>
+
+<p>这段代码的精神值得高亮——<strong>错误不是抛给框架的，是回传给模型自己改的</strong>。</p>
+
+<div class="callout tip">
+  <span class="label">设计原则</span>
+  <em>能让 LLM 自己改的，就让 LLM 自己改</em>。它读到"Tool 'web_seach' doesn't exist.
+  Available: web_search, ..." 会自动改成 <code>web_search</code>。比抛异常给用户、要求重发请求
+  优雅得多。这就是利用 LLM 智能的核心打法。
+</div>
+
+<h3>JSON 解析的两种失败</h3>
+
+<pre><code><span class="filename">agent/conversation_loop.py:3306-3389 (摘要)</span>
+<span class="c"># 校验 arguments JSON</span>
+invalid_json = []
+<span class="k">for</span> tc <span class="k">in</span> response.tool_calls:
+    <span class="k">try</span>:
+        json.<span class="f">loads</span>(tc.function.arguments)
+    <span class="k">except</span> json.JSONDecodeError <span class="k">as</span> e:
+        invalid_json.<span class="f">append</span>((tc.function.name, <span class="f">str</span>(e)))
+
+<span class="k">if</span> invalid_json:
+    <span class="c"># 关键判断：是被截断 还是 真的语法错</span>
+    truncated = <span class="f">any</span>(
+        <span class="k">not</span> (tc.function.arguments <span class="k">or</span> <span class="s">""</span>).<span class="f">rstrip</span>().<span class="f">endswith</span>((<span class="s">"}"</span>, <span class="s">"]"</span>))
+        <span class="k">for</span> tc <span class="k">in</span> response.tool_calls
+    )
+
+    <span class="k">if</span> truncated:
+        <span class="c"># 截断不能 retry — 再 retry 还是会截断</span>
+        <span class="k">return</span> {<span class="s">"error"</span>: <span class="s">"Response truncated by max_tokens"</span>}
+
+    <span class="k">if</span> agent._invalid_json_retries <span class="k">&lt;</span> <span class="num">3</span>:
+        agent._invalid_json_retries <span class="k">+=</span> <span class="num">1</span>
+        <span class="c"># 不污染历史，直接重试 API call</span>
+        <span class="k">continue</span>
+    <span class="k">else</span>:
+        <span class="c"># 3 次还不行，注入错误让模型看到</span>
+        ...
+</code></pre>
+
+<p>判断"是否截断"的逻辑——<em>JSON 不以 <code>}</code> 或 <code>]</code> 结尾</em>——很优雅，
+   不需要 token 计数，直接看字符串就够了。</p>
+
+<table>
+  <thead>
+    <tr><th>错误</th><th>原因</th><th>处理</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>JSON 截断</td>
+      <td>max_tokens 太小</td>
+      <td><em>直接报错</em>，告诉用户调大 max_tokens</td>
+    </tr>
+    <tr>
+      <td>JSON 语法错（未截断）</td>
+      <td>模型 hiccup</td>
+      <td>重试 API call，不污染 messages</td>
+    </tr>
+    <tr>
+      <td>幻觉工具名</td>
+      <td>schema 没传 / 模型走神</td>
+      <td>把错误作为 tool result 回传，让模型自己改</td>
+    </tr>
+    <tr>
+      <td>参数类型错</td>
+      <td>schema 有 <code>type: integer</code> 但传了字符串 <code>"42"</code></td>
+      <td><code>coerce_tool_args()</code> 静默转换</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">3.6</span>问题五：工具并发执行</h2>
+
+<p>
+  现代 LLM 经常一次返回多个 tool_calls。比如 Claude 看到一个 issue，会同时
+  <code>read_file("README.md")</code> 和 <code>read_file("CONTRIBUTING.md")</code>。
+  如果你串行执行，浪费时间。
+</p>
+
+<p>Hermes 的实际工具执行调用：</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:3477</span>
+agent.<span class="f">_execute_tool_calls</span>(response.message, messages, effective_task_id, api_call_count)</code></pre>
+
+<p>这个方法内部决定<em>并发</em>还是<em>串行</em>：</p>
+
+<ul>
+  <li><strong>并发</strong>：读文件、搜索、调 API——这些工具不修改共享状态，可以并发。</li>
+  <li><strong>串行</strong>：写文件、执行 shell、修改数据库——必须按顺序，否则数据竞争。</li>
+</ul>
+
+<p>判断标准在每个工具注册时声明（<code>concurrent_safe=True/False</code>）。
+   Hermes 默认<em>并发 safe</em>的工具集合包括所有 read-only 和搜索类工具。</p>
+
+<h3>异步桥接</h3>
+
+<p>
+  工具 handler 可以是 sync 也可以是 async。Hermes 用 <code>_run_async()</code>
+  桥接（model_tools.py:84-173）：
+</p>
+
+<pre><code><span class="k">def</span> <span class="f">_run_async</span>(coro):
+    <span class="s">"""Run an async coroutine from a sync context."""</span>
+    <span class="k">try</span>:
+        loop = asyncio.<span class="f">get_running_loop</span>()
+        <span class="c"># 已经在 event loop 里 — 起一个临时线程跑</span>
+        <span class="k">return</span> <span class="f">_run_in_thread</span>(coro)
+    <span class="k">except</span> RuntimeError:
+        <span class="c"># 没有 loop — 用持久 loop 跑</span>
+        <span class="k">return</span> <span class="f">_persistent_loop</span>().<span class="f">run_until_complete</span>(coro)
+</code></pre>
+
+<p>
+  这套桥接处理三种环境：
+  纯 CLI（无 loop）、Gateway（有自己的 asyncio loop）、被并行 worker 调用（每线程独立 loop）。
+  这种细节看似边角，但<em>"async client 在 sync 环境里能跑"</em>是 Hermes 能同时支持
+  asyncio Gateway 和 sync CLI 的关键。
+</p>
+
+<h2 class="section"><span class="secnum">3.7</span>问题六：空响应恢复</h2>
+
+<p>
+  LLM 偶尔返回完全空的响应——既没 tool_calls 也没 content。可能原因：max_tokens 太小、
+  provider bug、streaming 被服务端截断。
+</p>
+
+<p>"空响应"作为正常的退出条件是不对的——用户看到的是沉默。Hermes 用<em>三层 fallback</em>：</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:3571-3699 (摘要)</span>
+<span class="c"># 模型返回空：尝试恢复</span>
+final_response = response.message.content <span class="k">or</span> <span class="s">""</span>
+
+<span class="c"># Fallback 1: 看流式已经发给用户的文本</span>
+_partial = <span class="f">getattr</span>(agent, <span class="s">"_current_streamed_assistant_text"</span>, <span class="s">""</span>)
+<span class="k">if</span> agent.<span class="f">_has_content_after_think_block</span>(_partial):
+    final_response = agent.<span class="f">_strip_think_blocks</span>(_partial).<span class="f">strip</span>()
+    agent.<span class="f">_emit_status</span>(<span class="s">"↻ Stream interrupted — using delivered content"</span>)
+    <span class="k">break</span>
+
+<span class="c"># Fallback 2: 上一轮 LLM 有文本输出（虽然带了 tool_calls）</span>
+fallback = <span class="f">getattr</span>(agent, <span class="s">'_last_content_with_tools'</span>, <span class="k">None</span>)
+<span class="k">if</span> fallback <span class="k">and</span> <span class="f">getattr</span>(agent, <span class="s">'_last_content_tools_all_housekeeping'</span>, <span class="k">False</span>):
+    final_response = agent.<span class="f">_strip_think_blocks</span>(fallback).<span class="f">strip</span>()
+    agent.<span class="f">_emit_status</span>(<span class="s">"↻ Empty response after tools — using earlier content"</span>)
+    <span class="k">break</span>
+
+<span class="c"># Fallback 3: 注入合成消息让模型继续</span>
+<span class="k">if</span> _prior_was_tool <span class="k">and</span> <span class="k">not</span> agent._post_tool_empty_retried:
+    messages.<span class="f">append</span>({<span class="s">"role"</span>: <span class="s">"assistant"</span>, <span class="s">"content"</span>: <span class="s">"(empty)"</span>})
+    messages.<span class="f">append</span>({
+        <span class="s">"role"</span>: <span class="s">"user"</span>,
+        <span class="s">"content"</span>: <span class="s">"You just executed tool calls but returned an empty "</span>
+                   <span class="s">"response. Please process the tool results above and "</span>
+                   <span class="s">"continue with the task."</span>,
+    })
+    agent._post_tool_empty_retried = <span class="k">True</span>
+    <span class="k">continue</span>
+</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 3.4</span> 空响应的三层恢复</div>
+
+<p>设计精神：<em>永远不要静默失败</em>。哪怕注入一段合成的 user message，
+  也要让对话能继续，让用户看到有意义的输出。</p>
+
+<h2 class="section"><span class="secnum">3.8</span>问题七：Context Compression</h2>
+
+<p>
+  跑 50 个工具调用，messages 可能有 200KB token。这会撞 context window 上限。
+  Anthropic 2025 年提出的 <em>Compaction</em> 模式，Hermes 早就实现了：
+</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:3536-3551 (摘要)</span>
+<span class="c"># 每轮 tool call 之后检查是否需要压缩</span>
+_compressor = agent.context_compressor
+
+<span class="c"># 用真实的 prompt token 数（不是估计）</span>
+<span class="k">if</span> _compressor.last_prompt_tokens <span class="k">&gt;</span> <span class="num">0</span>:
+    _real_tokens = _compressor.last_prompt_tokens
+<span class="k">else</span>:
+    _real_tokens = <span class="f">estimate_request_tokens_rough</span>(messages, tools=agent.tools)
+
+<span class="k">if</span> agent.compression_enabled <span class="k">and</span> _compressor.<span class="f">should_compress</span>(_real_tokens):
+    agent.<span class="f">_safe_print</span>(<span class="s">"  ⟳ compacting context…"</span>)
+    messages, active_system_prompt = agent.<span class="f">_compress_context</span>(
+        messages, system_message,
+        approx_tokens=_compressor.last_prompt_tokens,
+        task_id=effective_task_id,
+    )
+</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 3.5</span> Compression 触发条件</div>
+
+<p>核心机制：</p>
+
+<ol>
+  <li><strong>用真实 token 数</strong>，不是估算。<em>不是用 message 数量</em>。
+      为什么？因为有 reasoning model：reasoning content 不进 context window，
+      但会显著拉高 completion_tokens。基于 message 数会误判。</li>
+  <li><strong>only when needed</strong>：阈值默认是 context window 的 80%。
+      过早压缩浪费 token，过晚撞上限报错。</li>
+  <li><strong>压缩 = LLM 总结历史 + 替换</strong>：把前 N 条消息让 auxiliary LLM 总结，
+      替换原 messages 列表的前面部分，保留最近几条。</li>
+</ol>
+
+<div class="research-card">
+  <div class="ref-label">前沿对照</div>
+  <div class="ref-title">Anthropic Context Engineering · 2025</div>
+  <div class="ref-meta">Anthropic Engineering Blog</div>
+  <p>
+    Anthropic 2025 年中正式提出 "Compaction" 作为 context engineering 三招之一。
+    Hermes 这套已经写在代码里超过一年——但思想完全对应：
+    <em>"taking a conversation nearing the context window limit, summarizing
+    its contents, and reinitiating a new context window with the summary."</em>
+  </p>
+</div>
+
+<h2 class="section"><span class="secnum">3.9</span>问题八：流式回调</h2>
+
+<p>用户不愿意等 30 秒看到一次性 paste 进来的长答复。流式输出是基本要求：</p>
+
+<pre><code><span class="filename">agent/conversation_loop.py:3099-3111</span>
+<span class="k">def</span> <span class="f">_fire_stream_delta</span>(self, text: str) <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Fire all registered stream delta callbacks (display + TTS)."""</span>
+    <span class="k">if</span> <span class="f">getattr</span>(self, <span class="s">"_stream_needs_break"</span>, <span class="k">False</span>) <span class="k">and</span> text <span class="k">and</span> text.<span class="f">strip</span>():
+        self._stream_needs_break = <span class="k">False</span>
+        <span class="c"># 工具结果和文本之间补换行，避免视觉粘连</span>
+        text = <span class="s">"\n\n"</span> + text
+
+    <span class="k">if</span> <span class="f">isinstance</span>(text, str):
+        callbacks = [cb <span class="k">for</span> cb <span class="k">in</span> (self.stream_delta_callback,
+                                self._stream_callback) <span class="k">if</span> cb <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>]
+        <span class="k">for</span> cb <span class="k">in</span> callbacks:
+            <span class="k">try</span>:
+                <span class="f">cb</span>(text)
+            <span class="k">except</span> Exception:
+                <span class="k">pass</span>   <span class="c"># 不让回调错误打死循环</span>
+</code></pre>
+
+<p>几个细节：</p>
+
+<ul>
+  <li><strong>多个 callback</strong>：UI 一个、TTS 一个、转日志一个，互不知道彼此。</li>
+  <li><strong>try/except 永远在</strong>：一个 callback 抛错不能影响主循环。</li>
+  <li><strong>_stream_needs_break</strong>：工具结束后第一个文本 token 自动加换行，
+      避免 <code>tool_result foo</code> 和模型说"bar" 粘成 <code>tool_result foobar</code>。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">3.10</span>整张地图</h2>
+
+<p>把以上所有问题串起来，run_conversation 的真实流程图：</p>
+
+<pre class="mermaid">
+flowchart TD
+  U(["user_message"]) --> Pre["pre-loop setup<br/><i>prefetch memory, build messages</i>"]
+  Pre --> Top(["循环顶部"])
+
+  Top --> CInt{"interrupt?"}
+  CInt -->|yes| BrkInt["break"]:::warn
+  CInt -->|no| CBud{"budget ok?"}
+
+  CBud -->|no| CGr{"grace?"}
+  CGr -->|no| BrkBud["break"]:::warn
+  CGr -->|yes| Prep
+  CBud -->|yes| Prep["pre-call:<br/>sanitize · annotate cache"]
+
+  Prep --> Llm["LLM call<br/><i>streaming, interrupt-safe</i>"]
+  Llm --> CTc{"tool_calls?"}
+
+  CTc -->|no| CEmpty{"empty<br/>response?"}
+  CEmpty -->|no| Fin["final answer"]:::good
+  CEmpty -->|yes| Fb["3-layer fallback<br/>nudge & continue"]
+  Fb --> Top
+
+  CTc -->|yes| Val["validate"]
+  Val --> CVal{"invalid?"}
+  CVal -->|yes| Retry["retry up to 3x"] --> Top
+  CVal -->|no| Exec["execute<br/><i>concurrent / serial</i>"]
+  Exec --> Append["append tool results"]
+  Append --> CComp{"compression?"}
+  CComp -->|yes| Compress["compress"] --> Top
+  CComp -->|no| Top
+
+  Fin --> Post["post-loop:<br/>sync memory · save trajectory"]
+  BrkInt --> Post
+  BrkBud --> Post
+  Post --> Done(["return"])
+
+  classDef warn fill:#faf0e3,stroke:#b85c00,color:#b85c00
+  classDef good fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+</pre>
+
+<p>这就是 3589 行代码的真实形状。</p>
+
+<h2 class="section"><span class="secnum">3.11</span>对照：其他主流 Agent Loop</h2>
+
+<p>把 Hermes 的 3589 行放在一边，看看其他几家怎么写"loop"。每家选择都不同——
+   背后是不同的优先级。</p>
+
+<h3>Anthropic "Agentic Loop"（2024–2025 官方说法）</h3>
+
+<p>
+  Anthropic 在 Building Effective Agents 里给出的<em>骨架伪代码</em>：
+</p>
+
+<pre><code>env_state = <span class="f">get_initial_environment</span>()
+<span class="k">while</span> <span class="k">True</span>:
+    response = <span class="f">llm_call</span>(env_state)
+    <span class="k">if</span> response.<span class="f">is_terminal</span>():
+        <span class="k">return</span>
+    env_state = <span class="f">apply_action</span>(env_state, response.action)
+</code></pre>
+
+<p>
+  对比 Hermes 的 13 行精髓：几乎一样的形态——only Anthropic 把"工具调用"
+  抽象成更通用的"action on environment"。<em>这是 Anthropic 内部 Claude Code、
+  Claude Desktop computer use 共用的最小心智模型</em>。
+</p>
+
+<h3>OpenAI Agents SDK 的 loop</h3>
+
+<p>
+  OpenAI Agents SDK 把循环封装成 <code>Runner.run()</code>。核心结构：
+</p>
+
+<pre><code><span class="k">from</span> openai.agents <span class="k">import</span> Agent, Runner, function_tool
+
+@<span class="f">function_tool</span>
+<span class="k">def</span> <span class="f">web_search</span>(query: str) <span class="k">-&gt;</span> str:
+    ...
+
+agent = <span class="f">Agent</span>(
+    name=<span class="s">"researcher"</span>,
+    instructions=<span class="s">"..."</span>,
+    tools=[web_search],
+)
+
+result = <span class="k">await</span> Runner.<span class="f">run</span>(agent, <span class="s">"Find Python 3.13 release date"</span>)</code></pre>
+
+<p>
+  内部和 Hermes 类似——while 循环 + 工具调用 + tool_choice 控制。但 OpenAI Agents SDK
+  把 budget / interrupt / retry 都<em>藏在 Runner 内部</em>，开发者看不到这层复杂。
+  好处：上手快。坏处：debug 难——出问题时不知道是 Runner 内的哪一层。
+</p>
+
+<h3>Claude Code 的 loop</h3>
+
+<p>
+  Anthropic 自家的 Claude Code（CLI 工具）loop 设计公开度较低，但有几个关键特点：
+</p>
+
+<ul>
+  <li><strong>无 max_iterations 上限</strong>——只有 token budget。让 Agent 自己决定停。</li>
+  <li><strong>Sub-agent 默认走 stateful Sonnet</strong>（便宜版），父用 Opus。</li>
+  <li><strong>Tool call 失败自动 retry 3 次</strong>，但每次给模型看完整 error。</li>
+  <li><strong>"Plan mode" 隔离</strong>——规划阶段不让模型用 write 类工具，只允许 read。</li>
+</ul>
+
+<p>Hermes 沿用了上面前两条，第三条做得相似，第四条没做。</p>
+
+<h3>LangGraph 的 loop</h3>
+
+<p>
+  LangGraph 的"loop"其实是<em>"图遍历"</em>——你把整个 agent 行为定义成 StateGraph，
+  Runner 按节点 + 条件边走。每个节点可能是 LLM call、可能是工具、可能是判断。
+  和 Hermes 的"while 循环"心智完全不同。
+</p>
+
+<p>选择 LangGraph 的<em>正当理由</em>：</p>
+
+<ul>
+  <li>需要在工作流中间持久化状态、断点恢复。</li>
+  <li>工作流复杂到画图才说得清楚。</li>
+  <li>需要 LangSmith 那种 trace observability。</li>
+</ul>
+
+<p>选择 Hermes 这种<em>直接 while 循环</em>的<em>正当理由</em>：</p>
+
+<ul>
+  <li>工作流是"无限循环 + LLM 决定"——状态机画不出来。</li>
+  <li>不想引入第三方 framework 的抽象债。</li>
+  <li>需要每一步都能在 Python debugger 里 step through。</li>
+</ul>
+
+<div class="callout">
+  <span class="label">选哪个</span>
+  没有标准答案。但 2026 业界共识：<em>核心 agentic loop 用直接代码（学 Hermes）+ 外层用 LangGraph 编排多个 agent</em>
+  是最稳的组合。OpenAI Agents SDK 适合"我就用 OpenAI"的纯 Anthropic / OpenAI 生态用户。
+</div>
+
+<h2 class="section"><span class="secnum">3.12</span>本章带走的</h2>
+
+<ul>
+  <li>Agent loop 的精髓是 13 行，但生产实现是 3589 行。差距全在<em>边界条件处理</em>。</li>
+  <li><strong>Budget + Grace Call</strong>：硬上限 + 一次宽限，避免"工具调用完没机会答用户"。</li>
+  <li><strong>Interrupt 是 flag，不是 abort</strong>：保证 messages 完整性。</li>
+  <li><strong>消息预处理流水线</strong>：cache 标记、surrogate 清洗、tool result 截断、空白标准化。</li>
+  <li><strong>工具调用校验</strong>：幻觉、JSON 截断、JSON 语法错，三种不同处理方式。</li>
+  <li><strong>错误回传给模型</strong>是核心打法：能让 LLM 自己改正的就让它改。</li>
+  <li><strong>空响应有三层 fallback</strong>：partial stream、prior content、nudge。永不静默失败。</li>
+  <li><strong>Compression</strong>触发条件用真实 prompt tokens，不是估算。</li>
+  <li><strong>Streaming callback</strong>用 try/except 包裹，回调失败不打死主循环。</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">心法</span>
+  把这一章的 8 个问题印在脑子里。每次你写"agent loop"代码时，自问：
+  这 8 个问题中我处理了几个？每多处理一个，你的 agent 就离能用近一点。
+</div>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      把第 3.1 节的 13 行精髓敲一遍。然后用你最喜欢的 LLM API 跑一个最简单的工具（比如
+      <code>get_current_time</code>）调用。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 Hermes 不直接 <code>max_iterations += 1</code> 而要单独引入 <code>_budget_grace_call</code> flag？
+      用 50 字解释。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      打开 <code>agent/conversation_loop.py</code>，找到 <code>_interrupt_requested</code> 在文件里出现的所有位置（约 10 处）。
+      画出它的生命周期：哪里被设 True、哪里被检查、哪里被清空。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      实现一个简化版的"幻觉工具名处理"。给定一个 <code>tool_calls</code> 列表（含一个不存在的工具名），
+      返回正确的 messages.append 调用，让 LLM 下一轮能改正。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Hermes 用 <code>_compressor.last_prompt_tokens</code> 作为压缩触发条件——但这个值是<em>上一次</em> API
+      call 返回的。如果上一次很短、本次会暴涨，可能错过压缩时机。设计一种更鲁棒的触发条件，
+      不依赖 round-trip 之后的反馈。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      研究 conversation_loop 中"reasoning content"的处理（约 2283–2334 行）。
+      写一段 200 字的总结：不同 provider（OpenAI、Anthropic、DeepSeek、Qwen）的 reasoning 格式有什么差异？
+      Hermes 怎么统一？
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch02-mental-model.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 2 章 · 心智模型</div>
+  </a>
+  <a class="next" href="ch04-protocol.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 4 章 · 消息协议与 Tool Calling</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

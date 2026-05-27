@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 14 章 · 动手实践与设计哲学 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part VII · 实践
+  <span class="sep">›</span>
+  第 14 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 14</div>
+  <h1>动手实践与设计哲学</h1>
+  <p class="chapter-subtitle">从零跑通 Hermes、写一个 Plugin、写一个 Skill、写一个 MCP server。
+    然后总结这本书带走的 10 条工程原则。</p>
+  <div class="meta">
+    <span>本章约 6,000 字</span>
+    <span>阅读 + 实操 ~60 分钟</span>
+    <span>关键词：installation · plugin · skill · MCP · philosophy</span>
+  </div>
+</div>
+
+<p class="lead">
+  前 13 章都是<em>读</em>。最后一章是<em>动手</em>。读再多代码不动手，知识是漂浮的。
+  这一章带你跑通四件事：装 Hermes、写一个工具 Plugin、写一个 Skill、写一个 MCP server。
+  完成这四件你的"工程肌肉记忆"才算建立。然后我们用 10 条原则做收尾。
+</p>
+
+<h2 class="section"><span class="secnum">14.1</span>安装 Hermes</h2>
+
+<h3>一键脚本（macOS / Linux / WSL2）</h3>
+
+<pre><code>curl <span class="k">-fsSL</span> https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh <span class="k">|</span> bash
+<span class="k">source</span> ~/.bashrc            <span class="c"># 或 ~/.zshrc</span></code></pre>
+
+<p>脚本会装：uv、Python 3.11、Node.js、ripgrep、ffmpeg、Hermes 本身。安装到 <code>~/.hermes/</code>。
+   往 <code>~/.local/bin/</code> 加一个 <code>hermes</code> 软链。</p>
+
+<h3>从源码（推荐——学习用）</h3>
+
+<pre><code>git clone https://github.com/NousResearch/hermes-agent.git
+<span class="k">cd</span> hermes-agent
+./setup-hermes.sh
+<span class="c"># 装 uv、建 .venv、pip install -e .[all]、软链到 ~/.local/bin/hermes</span>
+./hermes                    <span class="c"># wrapper 自动激活 venv</span></code></pre>
+
+<h3>设置 Provider</h3>
+
+<p>第一次启动 <code>hermes setup</code> 走 wizard。或者手动：</p>
+
+<pre><code><span class="c"># ~/.hermes/.env</span>
+ANTHROPIC_API_KEY=sk-ant-...
+<span class="c"># 或 OpenRouter（覆盖 200+ 模型）：</span>
+OPENROUTER_API_KEY=sk-or-...
+<span class="c"># 或 DeepSeek（便宜大碗）：</span>
+DEEPSEEK_API_KEY=sk-...</code></pre>
+
+<pre><code><span class="c"># ~/.hermes/config.yaml</span>
+model:
+  provider: anthropic
+  model: claude-opus-4.7
+  fallback_provider: openrouter
+  fallback_model: anthropic/claude-sonnet-4.6
+
+tools:
+  cli:
+    enabled: [web, file, browser, terminal, memory, skills, vision]</code></pre>
+
+<h3>首次对话</h3>
+
+<pre><code>hermes
+<span class="c"># 进入交互</span>
+
+&gt; <span class="k">列出当前目录下 .py 文件，统计总行数</span>
+
+🛠 terminal: ls *.py
+📋 todo: ...
+🛠 terminal: wc -l *.py
+当前目录下有 23 个 .py 文件，总行数 14,892。</code></pre>
+
+<h3>常用 slash 命令</h3>
+
+<table>
+  <thead><tr><th>命令</th><th>作用</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>/new</kbd></td><td>新 session，清空历史</td></tr>
+    <tr><td><kbd>/model</kbd></td><td>切模型</td></tr>
+    <tr><td><kbd>/tools</kbd></td><td>看 / 改启用的 toolset</td></tr>
+    <tr><td><kbd>/insights</kbd></td><td>看 token 用量 + cache 命中率</td></tr>
+    <tr><td><kbd>/skills</kbd></td><td>看已装 skill / 搜 hub</td></tr>
+    <tr><td><kbd>/memory</kbd></td><td>看 / 写 memory</td></tr>
+    <kbd>/help</kbd>
+    <tr><td><kbd>/help</kbd></td><td>所有命令</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">14.2</span>实战 1：写一个 Plugin 工具</h2>
+
+<p>目标：给 Hermes 加一个 <code>fortune_cookie</code> 工具，让它抽一句励志格言。
+   走 Plugin 路线（不动主仓库）。</p>
+
+<h3>步骤 1：建目录</h3>
+
+<pre><code><span class="k">mkdir</span> <span class="k">-p</span> ~/.hermes/plugins/fortune</code></pre>
+
+<h3>步骤 2：写 plugin.yaml</h3>
+
+<pre><code><span class="filename">~/.hermes/plugins/fortune/plugin.yaml</span>
+name: fortune
+version: <span class="s">"0.1.0"</span>
+description: <span class="s">"Random programming fortune quotes."</span>
+author: <span class="s">"your name"</span>
+license: MIT</code></pre>
+
+<h3>步骤 3：写 __init__.py</h3>
+
+<pre><code><span class="filename">~/.hermes/plugins/fortune/__init__.py</span>
+<span class="k">import</span> json
+<span class="k">import</span> random
+
+FORTUNES = [
+    <span class="s">"The best way to predict the future is to invent it. — Alan Kay"</span>,
+    <span class="s">"Premature optimization is the root of all evil. — Donald Knuth"</span>,
+    <span class="s">"Make it work, make it right, make it fast. — Kent Beck"</span>,
+    <span class="s">"Talk is cheap. Show me the code. — Linus Torvalds"</span>,
+    <span class="s">"Simplicity is prerequisite for reliability. — Edsger Dijkstra"</span>,
+    <span class="s">"Programming is the art of telling another human what one wants the computer to do. — Donald Knuth"</span>,
+]
+
+
+<span class="k">def</span> <span class="f">fortune_handler</span>(args, **kw):
+    <span class="s">"""Return a random fortune quote."""</span>
+    quote = random.<span class="f">choice</span>(FORTUNES)
+    <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"quote"</span>: quote})
+
+
+FORTUNE_SCHEMA = {
+    <span class="s">"name"</span>: <span class="s">"fortune_cookie"</span>,
+    <span class="s">"description"</span>: (
+        <span class="s">"Return a random programming-themed fortune quote. "</span>
+        <span class="s">"Use when the user explicitly asks for inspiration, "</span>
+        <span class="s">"a quote, or 'something motivational about coding'. "</span>
+        <span class="s">"DO NOT use unprompted — let the user invoke it."</span>
+    ),
+    <span class="s">"parameters"</span>: {
+        <span class="s">"type"</span>: <span class="s">"object"</span>,
+        <span class="s">"properties"</span>: {},
+        <span class="s">"required"</span>: [],
+    },
+}
+
+
+<span class="k">def</span> <span class="f">register</span>(ctx):
+    <span class="s">"""Plugin entry point — called by Hermes at load time."""</span>
+    ctx.<span class="f">register_tool</span>(
+        name=<span class="s">"fortune_cookie"</span>,
+        toolset=<span class="s">"fortune"</span>,
+        schema=FORTUNE_SCHEMA,
+        handler=fortune_handler,
+        emoji=<span class="s">"🥠"</span>,
+    )</code></pre>
+
+<h3>步骤 4：启用 toolset</h3>
+
+<pre><code><span class="k">hermes</span> tools enable fortune
+<span class="c"># 或编辑 config.yaml 的 tools.cli.enabled 列表加 "fortune"</span></code></pre>
+
+<h3>步骤 5：试</h3>
+
+<pre><code><span class="k">hermes</span>
+&gt; 给我抽一句关于编程的格言
+
+🥠 fortune_cookie() → {<span class="s">"quote"</span>: <span class="s">"Talk is cheap. Show me the code. — Linus Torvalds"</span>}
+
+Linus Torvalds 说："Talk is cheap. Show me the code."
+这是他在 LKML 上著名的回应——意思是不要光讨论，把实际代码拿出来。</code></pre>
+
+<div class="callout good">
+  <span class="label">完成</span>
+  你刚写了你的第一个 Hermes 工具。<strong>没改主仓库一行代码</strong>。
+  下一步可以试做：(1) <em>weather_lookup</em>——调 wttr.in；
+  (2) <em>github_star</em>——给一个 repo 点 star；
+  (3) <em>image_caption</em>——调 Claude vision 给图片打描述。
+</div>
+
+<h2 class="section"><span class="secnum">14.3</span>实战 2：写一个 Skill</h2>
+
+<p>目标：让 Agent 知道"按 Conventional Commits 格式写 commit message"。</p>
+
+<h3>步骤 1：建目录</h3>
+
+<pre><code><span class="k">mkdir</span> <span class="k">-p</span> ~/.hermes/skills/git/conventional-commit</code></pre>
+
+<h3>步骤 2：写 SKILL.md</h3>
+
+<pre><code><span class="filename">~/.hermes/skills/git/conventional-commit/SKILL.md</span>
+---
+name: conventional-commit
+description: <span class="s">"Format git commit messages as Conventional Commits."</span>
+version: 1.0.0
+author: <span class="s">"your name"</span>
+license: MIT
+metadata:
+  hermes:
+    tags: [git, commit, convention]
+    created_by: user
+---
+
+# Conventional Commit Skill
+
+When the user asks for a commit message, output **one** message following
+the Conventional Commits format:
+
+\`\`\`
+&lt;type&gt;(&lt;scope&gt;): &lt;subject in imperative mood, lowercase, no period&gt;
+
+&lt;optional body explaining WHY, wrapped at 72 cols&gt;
+
+&lt;optional footer: BREAKING CHANGE / refs / issue links&gt;
+\`\`\`
+
+## When to Use
+
+- User asks for "a commit message"
+- User asks to "write a commit"
+- User asks "what should the commit be?"
+
+## When NOT to Use
+
+- User wants a PR title (use a similar but different convention)
+- User asks for a changelog entry (different format)
+- Project explicitly uses other convention (check CONTRIBUTING.md first)
+
+## Types
+
+| type     | use case                              |
+|----------|---------------------------------------|
+| feat     | new user-facing functionality         |
+| fix      | bug fix                               |
+| refactor | code change with no behavior delta    |
+| docs     | documentation only                    |
+| chore    | tooling, build, deps                  |
+| test     | adding or fixing tests                |
+| perf     | performance improvement               |
+| ci       | CI configuration changes              |
+| build    | build system / dep changes            |
+
+## Subject Rules
+
+- **max 50 chars**
+- **imperative mood**: <span class="s">"add X"</span> not <span class="s">"adds X"</span> or <span class="s">"added X"</span>
+- **no period at end**
+- **lowercase**
+
+## Examples
+
+\`\`\`
+feat(auth): add OAuth2 PKCE flow
+
+fix(db): handle null user_id in session lookup
+
+refactor(api): extract pagination helper
+
+docs: clarify env var defaults in README
+\`\`\`
+
+## With breaking change
+
+\`\`\`
+feat(api): use new pagination schema
+
+The /items endpoint now returns {data, cursor} instead of bare array.
+
+BREAKING CHANGE: callers must read response.data instead of treating
+the response as an array.
+\`\`\`</code></pre>
+
+<h3>步骤 3：用</h3>
+
+<pre><code><span class="k">hermes</span>
+&gt; /conventional-commit
+[Skill loaded: conventional-commit]
+
+&gt; 我刚修了 auth refresh token 过期没处理导致 crash 的 bug，给个 commit message
+
+fix(auth): handle expired refresh token without crash
+
+The refresh endpoint returns 401 when the token has expired. Previously
+we re-raised, crashing the session. Now we clear local tokens and
+surface a clean re-auth prompt.
+
+Refs: #842</code></pre>
+
+<p>注意 Hermes 输出 <em>立刻符合</em>规范。<code>fix(auth)</code> 不是它瞎猜的——
+   是 SKILL.md 告诉它的。</p>
+
+<h3>给 Skill 加 Scripts</h3>
+
+<p>复杂逻辑别让 LLM inline 写，扔脚本里：</p>
+
+<pre><code>~/.hermes/skills/research/web_scrape/
+├── SKILL.md                <span class="c"># 决策手册</span>
+├── scripts/
+│   └── extract_main.py    <span class="c"># 用 BeautifulSoup 抽主内容</span>
+└── references/
+    └── selectors.json     <span class="c"># 常见网站的 CSS 选择器</span></code></pre>
+
+<p>SKILL.md 里只说 <em>"用 scripts/extract_main.py 提取"</em>，
+   Agent 通过 <code>execute_code</code> 或 <code>terminal</code> 工具执行。</p>
+
+<h3>让 Agent 自己创建 Skill</h3>
+
+<p>跑一个复杂任务，结尾问它：</p>
+
+<pre><code>&gt; 这个流程值得存成一个 skill 吗？如果是，请用 skill_manage 创建。
+
+✓ skill_manage(action=<span class="s">"create"</span>, name=<span class="s">"async-task-monitoring"</span>, ...)
+   skill saved to ~/.hermes/skills/devops/async-task-monitoring/</code></pre>
+
+<p>Curator 会自动把这个 skill 标记 <code>created_by: agent</code>，未来 90 天不用就归档。
+   想保留？用 <code>hermes curator pin async-task-monitoring</code>。</p>
+
+<h2 class="section"><span class="secnum">14.4</span>实战 3：写一个 MCP Server</h2>
+
+<p>第 7 章和第 13 章讲了 MCP 的重要性。现在我们写一个。</p>
+
+<p>目标：暴露一个 <code>calculate_distance</code> 工具——两个城市的距离。让 Hermes 自动接入。</p>
+
+<h3>步骤 1：建项目</h3>
+
+<pre><code><span class="k">mkdir</span> mcp-distance &amp;&amp; <span class="k">cd</span> mcp-distance
+uv venv .venv
+<span class="k">source</span> .venv/bin/activate
+uv pip install <span class="s">"mcp&gt;=1.0"</span></code></pre>
+
+<h3>步骤 2：写 server.py</h3>
+
+<pre><code><span class="filename">mcp-distance/server.py</span>
+<span class="k">import</span> json
+<span class="k">from</span> mcp.server <span class="k">import</span> Server
+<span class="k">from</span> mcp.server.stdio <span class="k">import</span> stdio_server
+<span class="k">import</span> mcp.types <span class="k">as</span> types
+
+server = <span class="f">Server</span>(<span class="s">"distance-calculator"</span>)
+
+<span class="c"># 简化版"城市坐标"，实际可换成调 API</span>
+CITY_COORDS = {
+    <span class="s">"beijing"</span>: (<span class="num">39.9042</span>, <span class="num">116.4074</span>),
+    <span class="s">"shanghai"</span>: (<span class="num">31.2304</span>, <span class="num">121.4737</span>),
+    <span class="s">"tokyo"</span>: (<span class="num">35.6762</span>, <span class="num">139.6503</span>),
+    <span class="s">"san francisco"</span>: (<span class="num">37.7749</span>, -<span class="num">122.4194</span>),
+    <span class="s">"new york"</span>: (<span class="num">40.7128</span>, -<span class="num">74.0060</span>),
+}
+
+
+<span class="k">def</span> <span class="f">haversine</span>(lat1, lon1, lat2, lon2) <span class="k">-&gt;</span> float:
+    <span class="s">"""Great-circle distance in km."""</span>
+    <span class="k">from</span> math <span class="k">import</span> radians, sin, cos, sqrt, atan2
+    R = <span class="num">6371</span>
+    dlat = <span class="f">radians</span>(lat2 - lat1)
+    dlon = <span class="f">radians</span>(lon2 - lon1)
+    a = <span class="f">sin</span>(dlat/<span class="num">2</span>)**<span class="num">2</span> + <span class="f">cos</span>(<span class="f">radians</span>(lat1)) * <span class="f">cos</span>(<span class="f">radians</span>(lat2)) * <span class="f">sin</span>(dlon/<span class="num">2</span>)**<span class="num">2</span>
+    <span class="k">return</span> R * <span class="num">2</span> * <span class="f">atan2</span>(<span class="f">sqrt</span>(a), <span class="f">sqrt</span>(<span class="num">1</span>-a))
+
+
+<span class="k">@server.list_tools</span>()
+<span class="k">async</span> <span class="k">def</span> <span class="f">handle_list_tools</span>() <span class="k">-&gt;</span> <span class="f">list</span>[types.Tool]:
+    <span class="k">return</span> [
+        types.<span class="f">Tool</span>(
+            name=<span class="s">"calculate_distance"</span>,
+            description=<span class="s">"Calculate great-circle distance between two cities in km."</span>,
+            inputSchema={
+                <span class="s">"type"</span>: <span class="s">"object"</span>,
+                <span class="s">"properties"</span>: {
+                    <span class="s">"city_a"</span>: {<span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"e.g. 'beijing'"</span>},
+                    <span class="s">"city_b"</span>: {<span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"e.g. 'tokyo'"</span>},
+                },
+                <span class="s">"required"</span>: [<span class="s">"city_a"</span>, <span class="s">"city_b"</span>],
+            },
+        ),
+    ]
+
+
+<span class="k">@server.call_tool</span>()
+<span class="k">async</span> <span class="k">def</span> <span class="f">handle_call_tool</span>(name: str, args: <span class="f">dict</span>) <span class="k">-&gt;</span> <span class="f">list</span>[types.TextContent]:
+    <span class="k">if</span> name != <span class="s">"calculate_distance"</span>:
+        <span class="k">raise</span> <span class="f">ValueError</span>(<span class="f">f</span><span class="s">"Unknown tool: {name}"</span>)
+
+    a = args[<span class="s">"city_a"</span>].<span class="f">lower</span>().<span class="f">strip</span>()
+    b = args[<span class="s">"city_b"</span>].<span class="f">lower</span>().<span class="f">strip</span>()
+
+    <span class="k">if</span> a <span class="k">not</span> <span class="k">in</span> CITY_COORDS <span class="k">or</span> b <span class="k">not</span> <span class="k">in</span> CITY_COORDS:
+        <span class="k">return</span> [types.<span class="f">TextContent</span>(
+            type=<span class="s">"text"</span>,
+            text=json.<span class="f">dumps</span>({<span class="s">"error"</span>: <span class="s">"Unknown city. Known: "</span> + <span class="f">str</span>(<span class="f">list</span>(CITY_COORDS))})
+        )]
+
+    lat1, lon1 = CITY_COORDS[a]
+    lat2, lon2 = CITY_COORDS[b]
+    d = <span class="f">haversine</span>(lat1, lon1, lat2, lon2)
+    <span class="k">return</span> [types.<span class="f">TextContent</span>(
+        type=<span class="s">"text"</span>,
+        text=json.<span class="f">dumps</span>({<span class="s">"distance_km"</span>: <span class="f">round</span>(d, <span class="num">2</span>), <span class="s">"from"</span>: a, <span class="s">"to"</span>: b})
+    )]
+
+
+<span class="k">async</span> <span class="k">def</span> <span class="f">main</span>():
+    <span class="k">async</span> <span class="k">with</span> <span class="f">stdio_server</span>() <span class="k">as</span> (read, write):
+        <span class="k">await</span> server.<span class="f">run</span>(read, write, server.<span class="f">create_initialization_options</span>())
+
+
+<span class="k">if</span> <span class="f">__name__</span> == <span class="s">"__main__"</span>:
+    <span class="k">import</span> asyncio
+    asyncio.<span class="f">run</span>(<span class="f">main</span>())</code></pre>
+
+<h3>步骤 3：让 Hermes 连接</h3>
+
+<pre><code><span class="filename">~/.hermes/config.yaml</span>
+mcp:
+  servers:
+    distance:
+      command: python
+      args: [<span class="s">/path/to/mcp-distance/server.py</span>]
+      enabled: <span class="k">true</span></code></pre>
+
+<h3>步骤 4：试</h3>
+
+<pre><code><span class="k">hermes</span>
+&gt; 北京到东京多远？
+
+🛠 mcp__distance__calculate_distance(city_a=<span class="s">"beijing"</span>, city_b=<span class="s">"tokyo"</span>)
+  → {<span class="s">"distance_km"</span>: <span class="num">2103.97</span>, <span class="s">"from"</span>: <span class="s">"beijing"</span>, <span class="s">"to"</span>: <span class="s">"tokyo"</span>}
+
+北京到东京约 2104 公里（大圆距离）。</code></pre>
+
+<div class="callout good">
+  <span class="label">学到了什么</span>
+  你刚写了一个标准 MCP server。<em>不只 Hermes 能用</em>——Claude Desktop、Cursor、Zed
+  全部能直接接入。一份代码，多个 host。这就是 MCP 的威力。
+</div>
+
+<h2 class="section"><span class="secnum">14.5</span>实战 4：给项目写 AGENTS.md</h2>
+
+<p>
+  最后一个实战是<em>"教 Agent 怎么在你的项目里工作"</em>。
+  这是 Hermes / Claude Code / Cursor 都支持的通用方式。
+</p>
+
+<h3>AGENTS.md 是什么</h3>
+
+<p>项目根目录下的一份 Markdown 文档，告诉 AI Agent：</p>
+
+<ul>
+  <li>项目的高层架构（用一两个 ASCII diagram）</li>
+  <li>关键模块的位置（"配置在 config/"、"测试在 tests/"）</li>
+  <li>常见任务的 idiom（"添加 API 端点：1) 改 routes.py 2) 加 test 3) 改 OpenAPI spec"）</li>
+  <li>禁忌（"不要直接改 generated/ 目录"、"DB 操作必须走 transaction"）</li>
+  <li>测试命令、lint 命令、build 命令</li>
+</ul>
+
+<h3>最简模板</h3>
+
+<pre><code><span class="filename">AGENTS.md（项目根目录）</span>
+# Project Agent Guide
+
+## What This Is
+
+A Python service that processes incoming webhooks from Stripe and
+writes normalized events to PostgreSQL. Built on FastAPI + SQLAlchemy.
+
+## Architecture
+
+\`\`\`
+[Stripe] --webhook--&gt; [FastAPI server (app.py)]
+                          │
+                          │ verify signature
+                          │ parse event
+                          ▼
+                     [Event Handler (handlers/)]
+                          │
+                          │ normalize → ORM
+                          ▼
+                     [PostgreSQL via SQLAlchemy]
+\`\`\`
+
+## Key Files
+
+| Path | Purpose |
+|------|---------|
+| <span class="s">`app.py`</span> | FastAPI entry point, route definitions |
+| <span class="s">`handlers/`</span> | One file per Stripe event type |
+| <span class="s">`db/models.py`</span> | SQLAlchemy models |
+| <span class="s">`db/migrations/`</span> | Alembic migrations — never edit by hand |
+| <span class="s">`tests/`</span> | pytest tests; use fixtures from <span class="s">`tests/conftest.py`</span> |
+| <span class="s">`.env.example`</span> | Required env vars |
+
+## Common Tasks
+
+### Add a new Stripe event handler
+
+1. Create <span class="s">`handlers/&lt;event_name&gt;.py`</span> with a <span class="s">`def handle(event: dict) -&gt; None`</span> function.
+2. Register it in <span class="s">`handlers/__init__.py`</span>'s <span class="s">`HANDLERS`</span> dict.
+3. Add a test in <span class="s">`tests/handlers/test_&lt;event_name&gt;.py`</span> using <span class="s">`stripe_event_factory`</span>.
+4. Run <span class="s">`pytest tests/handlers/`</span>.
+
+### Add a new DB column
+
+1. Add column to the model in <span class="s">`db/models.py`</span>.
+2. Generate migration: <span class="s">`alembic revision --autogenerate -m "&lt;desc&gt;"`</span>.
+3. Review the generated migration file. Edit if needed.
+4. Apply: <span class="s">`alembic upgrade head`</span>.
+
+## Commands
+
+\`\`\`bash
+make test         # pytest with coverage
+make lint         # ruff + mypy
+make migrate      # alembic upgrade head
+make dev          # start FastAPI with reload
+\`\`\`
+
+## Conventions
+
+- Use <span class="s">`from __future__ import annotations`</span> in every Python file.
+- Type hints required for all public functions.
+- Test files mirror source structure: <span class="s">`src/foo/bar.py`</span> → <span class="s">`tests/foo/test_bar.py`</span>.
+- Never raise from <span class="s">`handlers/*.py`</span> — log and return.
+
+## Forbidden
+
+- DO NOT edit <span class="s">`db/migrations/*.py`</span> manually after generation (re-generate instead).
+- DO NOT use <span class="s">`session.execute()`</span> with raw SQL — use ORM.
+- DO NOT add new top-level deps without discussing — we pin everything.</code></pre>
+
+<p>
+  把这份扔到你的项目根目录。Hermes / Cursor / Claude Code 启动时会自动发现并放进
+  context（第 5 章我们看过——它进 context 层）。Agent 立刻知道你的项目。
+</p>
+
+<div class="callout tip">
+  <span class="label">实用建议</span>
+  AGENTS.md 不必长。Hermes 自己的 AGENTS.md 53KB 是<em>极端例子</em>。
+  普通项目 2–5KB 就够。<em>关键是写清楚"常见任务怎么做"</em>——
+  Agent 看到清晰步骤会按你的步骤走，否则它会自己摸索（不一定符合你的项目惯例）。
+</div>
+
+<h2 class="section"><span class="secnum">14.6</span>实战 5：让 Skill 跨工具兼容</h2>
+
+<p>
+  第 8 章我们看过 Skill 在 2025.12 已经成为开放标准。
+  这一节带你<em>写一份能在 Claude Code、Cursor、Hermes、ChatGPT 都能用的 SKILL.md</em>。
+</p>
+
+<h3>跨工具兼容的 5 个规则</h3>
+
+<ol>
+  <li>
+    <strong>frontmatter 只用标准字段</strong>：<code>name</code>、<code>description</code>、
+    <code>version</code>、<code>license</code>、<code>platforms</code>。
+    Hermes 私有的 <code>metadata.hermes.*</code> 别用。
+  </li>
+  <li>
+    <strong>不引用 host-specific 工具名</strong>。引用工具时用通用名（"file editor"、"shell"），
+    不写 <code>browser_navigate</code> 这种 Hermes 特定名字。或者在 <code>## Prerequisites</code>
+    里写"requires: shell, file read/write"，让每个 host 自己 map 到本地工具。
+  </li>
+  <li>
+    <strong>用 fenced code 块</strong>。所有命令例子用 <code>```bash</code> 包，
+    不要假设 Markdown 处理器支持 Hermes 特定语法。
+  </li>
+  <li>
+    <strong>脚本放 <code>scripts/</code> 子目录</strong>，用相对路径引用。
+    所有 host 都遵守 SKILL.md 同级目录约定。
+  </li>
+  <li>
+    <strong>不依赖私有环境变量</strong>。如果 skill 需要 API key，要求在
+    <code>## Prerequisites</code> 里说清楚 env var 名字，让用户自己设。
+  </li>
+</ol>
+
+<h3>跨兼容 SKILL.md 模板</h3>
+
+<pre><code><span class="filename">~/.hermes/skills/dev/clean-pr-review/SKILL.md</span>
+---
+name: clean-pr-review
+description: <span class="s">"Review a GitHub PR with structured comments grouped by severity."</span>
+version: 1.0.0
+license: MIT
+author: <span class="s">"your name"</span>
+---
+
+# Clean PR Review
+
+Generate a structured PR review with comments grouped by severity
+(blocker / major / minor / nit).
+
+## When to Use
+
+- User asks <span class="s">"review this PR"</span> or <span class="s">"do a code review"</span>
+- User links a GitHub PR URL
+- User asks for feedback on a diff
+
+## When NOT to Use
+
+- User asks for a one-line approval comment
+- User wants you to merge the PR (use git tooling instead)
+
+## Prerequisites
+
+- Shell access to a tool that can fetch PR diffs (gh CLI, git, or HTTP)
+- Read access to the repository
+
+## Procedure
+
+1. Fetch the PR diff. Prefer <span class="s">`gh pr diff &lt;number&gt;`</span> if available;
+   fall back to <span class="s">`git diff &lt;base&gt;...&lt;head&gt;`</span>.
+
+2. Identify the changed files. For each file, categorize the change:
+   feat / fix / refactor / docs / test.
+
+3. Find issues by severity:
+   - **blocker** — bugs, security, broken builds
+   - **major** — design issues, missing tests for new behavior
+   - **minor** — code style, naming, readability
+   - **nit** — purely cosmetic
+
+4. Output in this exact format:
+
+   \`\`\`markdown
+   ## Summary
+
+   &lt;1-paragraph high-level summary&gt;
+
+   ## Blockers
+
+   - file:line — &lt;issue&gt; (suggest: &lt;fix&gt;)
+
+   ## Major
+
+   - ...
+
+   ## Minor / Nits
+
+   - ...
+   \`\`\`
+
+5. If no issues at a level, omit that section entirely.
+
+## Pitfalls
+
+- Don't pad: omit empty sections, don't say <span class="s">"no blockers found"</span>.
+- Don't approve / request changes — just output the review.</code></pre>
+
+<p>
+  这份 SKILL.md <em>没有任何 Hermes 私有内容</em>。把它扔进任意一个兼容 host:
+</p>
+
+<ul>
+  <li>Hermes: <code>~/.hermes/skills/dev/clean-pr-review/</code></li>
+  <li>Claude Code: <code>~/.claude/skills/dev/clean-pr-review/</code></li>
+  <li>Cursor: 通过 <code>.cursor/rules/</code> 引用</li>
+  <li>ChatGPT: 上传到 Custom GPT 的 instructions（手动复制）</li>
+</ul>
+
+<p>都能直接生效。这是 2025.12 之后 skill 生态的核心红利。</p>
+
+<h2 class="section"><span class="secnum">14.7</span>10 条设计哲学</h2>
+
+<p>读完前 13 章，把这本书的核心智慧提炼成 10 条原则。
+   把它们贴你写 Agent 代码的桌面上。</p>
+
+<h3>① 不要在 Augmented LLM 之上添加抽象，除非你能说清楚它解决什么具体问题</h3>
+
+<p>
+  Anthropic、Simon Willison、Hermes 维护者反复说这条。LangChain 风格的
+  <code>Agent</code> / <code>Chain</code> / <code>Memory</code> 基类层叠让代码难调试。
+  直接写循环 + 字典是更好的起点。<em>有需要再抽象，不要预先抽象</em>。
+</p>
+
+<h3>② 缓存是钱的问题，不是性能问题</h3>
+
+<p>
+  Agent 经济 90% 取决于 prompt cache 命中率。一次 system prompt 修改可能让账单 ×10。
+  所有"动态内容"<em>只 append 到末尾</em>，永不 insert/edit 中间。Skill 走 user message
+  注入而不是改 system——这是 Hermes 工程最核心的一招。
+</p>
+
+<h3>③ 错误返回值 &gt; 错误异常</h3>
+
+<p>
+  工具抛错 → 包成 <code>{"error": "..."}</code> JSON 给模型看。模型大概率自己改正。
+  抛异常给框架等于浪费 LLM 这层智能。"Tool 'web_seach' doesn't exist. Available: web_search, ..."
+  让模型下一轮自己改成 <code>web_search</code>。
+</p>
+
+<h3>④ 永远给 LLM 留余地</h3>
+
+<p>
+  预算耗尽给 grace call、空响应有三层 fallback、幻觉工具名让它重试 3 次——
+  <em>永远不要"硬性失败给用户看"</em>。注入合成消息让对话继续比留沉默好。
+</p>
+
+<h3>⑤ 把"自我改进"拆成三件事</h3>
+
+<p>
+  Skill（程序性记忆）+ Memory（情景记忆）+ Curator（维护）。没有黑魔法，
+  只是<em>"系统地把每次新经验存到合适的地方，并定期整理"</em>。三者缺一不可：
+  没有 Curator 你的 skill 库会腐烂；没有 Memory 你每次从零开始；没有 Skill
+  你只有事实没有方法。
+</p>
+
+<h3>⑥ 把"提示注入防御"做到工具层</h3>
+
+<p>
+  不要试图教 LLM 防御 prompt injection。<em>限制它能做的事</em>。Webhook 来的内容只暴露
+  safe toolset——就算 LLM 被骗，它根本看不见 <code>terminal</code> 工具。Capability-based
+  security 比 LLM-side 防御靠谱 100 倍。
+</p>
+
+<h3>⑦ Registry-based discovery 优于显式注册</h3>
+
+<p>
+  工具、provider、platform adapter、skill——都是"把文件丢进目录自动起效"。
+  你不维护一份导入列表，添加新东西的摩擦力降到最低。
+  这也是 plugin 系统能蓬勃发展的基础。
+</p>
+
+<h3>⑧ Hook 化的扩展点优于继承</h3>
+
+<p>
+  <code>pre_tool_call</code>、<code>transform_tool_result</code>、<code>on_session_start</code>...
+  Plugin 通过订阅生命周期事件扩展，核心保持稳定。
+  改不到的"特殊需求"先想<em>"能不能加个 hook"</em>，不要往 core 塞特定 plugin 逻辑。
+</p>
+
+<h3>⑨ Provider quirks 隔离在 Profile 子类</h3>
+
+<p>
+  不同模型 provider 的怪癖（DeepSeek thinking flag、Gemini tool_choice、reasoning 字段差异）
+  全部放在<em>ProviderProfile 子类的方法重载里</em>。主循环代码不出现一个 <code>if provider == "..."</code>。
+  这条规则适用于任何"对接多个 API"的场景。
+</p>
+
+<h3>⑩ 写代码时记住——你写的是给 LLM 看的</h3>
+
+<p>
+  Tool 的 schema description、Skill 的 SKILL.md、Provider profile 的注释——
+  这些<em>都被 LLM 读到</em>，影响下一轮决策。把它们写清楚比把变量名写好更重要。
+  Description 模糊 → LLM 用错工具；Skill <em>When to Use</em> 不清 → 该用没用。
+  <em>"代码不是给人写的，也是给 LLM 写的"</em>——这是 Agent 时代代码风格的新规则。
+</p>
+
+<h2 class="section"><span class="secnum">14.8</span>推荐阅读路径</h2>
+
+<p>读完这本书还不够。下面这些资源按优先级排：</p>
+
+<h3>必读</h3>
+
+<ol>
+  <li>Hermes <code>AGENTS.md</code> — 53KB 的项目工程指南，是<em>本书没收进来的"细节大全"</em>。</li>
+  <li>Hermes <code>agent/conversation_loop.py</code> — 把 644-3821 行（主 while）扫一遍。</li>
+  <li>Anthropic <a href="https://www.anthropic.com/research/building-effective-agents">Building Effective Agents</a>。</li>
+  <li>Anthropic <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Effective Context Engineering</a>。</li>
+  <li>MCP 协议规范 <a href="https://modelcontextprotocol.io/specification">modelcontextprotocol.io</a>。</li>
+</ol>
+
+<h3>论文（按重要性）</h3>
+
+<ol>
+  <li><strong>ReAct</strong> (Yao 2022) — arXiv:2210.03629</li>
+  <li><strong>Voyager</strong> (Wang 2023) — arXiv:2305.16291</li>
+  <li><strong>Generative Agents</strong> (Park 2023) — arXiv:2304.03442</li>
+  <li><strong>MemGPT</strong> (Packer 2023) — arXiv:2310.08560</li>
+  <li><strong>Reflexion</strong> (Shinn 2023) — arXiv:2303.11366</li>
+</ol>
+
+<h3>工业博客</h3>
+
+<ol>
+  <li>Anthropic Engineering — <a href="https://www.anthropic.com/engineering">anthropic.com/engineering</a></li>
+  <li>Simon Willison — 持续在 <a href="https://simonwillison.net">simonwillison.net</a> 综述</li>
+  <li>Cognition / Devin team blog</li>
+  <li>Cursor team blog</li>
+  <li>Hermes "What's New" — <a href="https://hermes-agent.nousresearch.com/docs/">hermes-agent.nousresearch.com/docs</a></li>
+</ol>
+
+<h3>动手项目</h3>
+
+<ol>
+  <li>给你自己的项目写 <code>AGENTS.md</code>，让 Hermes / Claude Code / Cursor 都能用。</li>
+  <li>写一个 MCP server 暴露你常用的 API（GitHub、Linear、自家 CMS……）。</li>
+  <li>试 Hermes 的 <code>delegate_task</code>：让 Agent 把一个大任务自己切给 sub-agent。</li>
+  <li>跑 Hermes 一周后看 <code>~/.hermes/skills/</code>——看 Agent 自己创建了什么。</li>
+  <li>把 Hermes 部署到 VPS，连 Telegram bot，开始用手机远程让它干活。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">14.9</span>结语</h2>
+
+<p>
+  你读完了一本 14 章、约 8 万字的 Agent 工程教材。如果你做了所有的练习和实践，
+  你现在拥有的不只是"知道 Agent 是什么"——你拥有<em>"看到任何 Agent 系统都能拆开
+  评估"</em>的能力。
+</p>
+
+<p>
+  Hermes 不是终点。它是 2024–2026 这段时期工程沉淀的<em>样本</em>。明年、后年、五年后，
+  会有更好的 Agent framework 出现。但底层规律不会变——
+</p>
+
+<ul>
+  <li>循环 + 工具 + 记忆是骨架；</li>
+  <li>缓存是经济命脉；</li>
+  <li>错误回传给模型是处理失败的核心打法；</li>
+  <li>能力限制比"教 LLM 别犯错"靠谱；</li>
+  <li>"自动化但可逆"是可信 AI 的底线；</li>
+  <li>少抽象、多代码、可审计、可分享。</li>
+</ul>
+
+<p>
+  把这些原则握在手里，<em>下次你看到任何 Agent 项目都知道该看什么</em>。
+  这就是本书的价值。
+</p>
+
+<div class="callout good">
+  <span class="label">最后</span>
+  Agent 工程仍是新领域。本书写到 2026 年 5 月，三年后回看可能很多细节过时。
+  但工程思维不过时。<em>读源码、问 Why、自己动手</em>——这三件永远是最快的学习路径。
+  <p style="margin-top: 12px; font-style: italic;">祝你 build 出更好的 Agent。</p>
+</div>
+
+<div class="exercises">
+  <h3>章末练习（也是给你自己的"出师题"）</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      把本章的 4 个实战全部跑通：装 Hermes、写 Plugin、写 Skill、写 MCP server。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      在你最熟悉的项目里加一份 <code>AGENTS.md</code>，让 AI Agent 能在里面工作。
+      用一周观察它的表现，然后<em>迭代</em>这份 AGENTS.md。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      把第 14.6 节的 10 条原则印出来贴桌上。下次写 Agent 代码时，逐条对照——
+      你违反了几条？
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      跑 SWE-Bench Verified 上的一个简单任务，用你自己的小 harness。看你的分数。
+      想想哪条原则没做到。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      给本书写一个章节"如何不读 Hermes 源码也能学 Agent 工程"——你会推荐什么书 / 论文 / 项目？
+      把你的版本与本书做对比。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      回头读第 1 章。问自己：<em>Agent 工程这个领域，五年后会变成什么样？</em>
+      写 500 字预测。一年后回来看你猜中几条。
+    </li>
+  </ol>
+</div>
+
+<hr style="margin: 80px 0 32px 0; border: none; border-top: 1px dashed var(--border);">
+
+<p style="text-align: center; color: var(--fg-dim); font-size: 14px;">
+  <em>—— End of Book ——</em>
+</p>
+
+<p style="text-align: center; color: var(--fg-dim); font-size: 13px; margin-top: 8px;">
+  <a href="index.html">返回总目录</a>
+</p>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch13-frontier.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 13 章 · 2024–2026 Agent Frontier</div>
+  </a>
+  <a class="next" href="index.html">
+    <div class="direction">回到</div>
+    <div class="title">📖 总目录</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

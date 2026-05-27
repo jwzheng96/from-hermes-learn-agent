@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 13 章 · 2024–2026 Agent Frontier — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part VI · 前沿研究
+  <span class="sep">›</span>
+  第 13 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 13</div>
+  <h1>2024–2026 Agent Frontier</h1>
+  <p class="chapter-subtitle">从 ReAct 之后，Agent 工程走到了哪里。
+    Context Engineering、Harness、Reasoning Models、SWE-Bench、MCP、
+    2026 Benchmark 六件套、Multi-Agent Framework 大洗牌、Agent RL、
+    Skills 标准化、Prompt Injection 攻防——这一章梳理 2024–2026 的关键工业与研究进展。</p>
+  <div class="meta">
+    <span>本章约 12,000 字</span>
+    <span>阅读 ~50 分钟</span>
+    <span>关键词：benchmark · multi-agent · agent RL · GRPO · skills 标准化 · injection 攻防</span>
+  </div>
+</div>
+
+<p class="lead">
+  前 12 章我们已经把 Hermes 拆开看。这一章不绑 Hermes——我们走出代码，俯瞰整个
+  2024–2026 Agent 工程的版图。看完你能回答：今天的<em>"最前沿 Agent 实践"</em>是什么、
+  还有哪些没解决的难题、Hermes 在这张图里的位置。
+</p>
+
+<h2 class="section"><span class="secnum">13.1</span>2024 转折点：从 demo 到产品</h2>
+
+<p>
+  2023 年是<em>"AutoGPT 泡沫"</em>时代。媒体说"agent 改变一切"，实际只能跑 demo。
+  到了 2024 年，几件事让 Agent 真正"能用"：
+</p>
+
+<ol>
+  <li><strong>OpenAI Function Calling 协议成熟</strong>，工具调用不再靠 prompt 解析。</li>
+  <li><strong>Anthropic Claude 3.5 Sonnet (2024.06)</strong> 让"长上下文 + 工具调用"
+      第一次真的可靠。Cursor 业务起飞主要靠它。</li>
+  <li><strong>Devin 立 flag (2024.03)</strong>：Cognition 演示了"AI 软件工程师"概念。
+      虽然 Devin 1.0 实际表现一般（SWE-Bench Verified 45.8%），但<em>市场被打开</em>。</li>
+  <li><strong>Anthropic Computer Use (2024.10)</strong>：让 Agent 真的能<em>看屏幕、动鼠标</em>。</li>
+  <li><strong>MCP 发布 (2024.11)</strong>：工具接入标准化。</li>
+  <li><strong>Anthropic "Building Effective Agents" (2024.12)</strong>：第一份被广泛接受的工程指南。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">13.2</span>Anthropic "Building Effective Agents" — 工程范式定形</h2>
+
+<div class="research-card">
+  <div class="ref-label">Industry Guide</div>
+  <div class="ref-title">Building Effective Agents</div>
+  <div class="ref-meta">Anthropic Engineering · 2024-12 · anthropic.com/research/building-effective-agents</div>
+  <p>
+    Anthropic 这篇博客在业界影响超过任何论文。它和大公司、初创公司大量合作后总结的<em>实用建议</em>，
+    不是空谈架构。
+  </p>
+</div>
+
+<p>它最大的贡献是<strong>把术语对齐</strong>。在它之前，"agent"什么意思人人不同。它的定义：</p>
+
+<ul>
+  <li><strong>Workflow</strong> = LLM 在<em>开发者预定义的代码路径</em>里被编排。</li>
+  <li><strong>Agent</strong> = LLM <em>动态决定</em>自己的工作路径和工具使用。</li>
+</ul>
+
+<p>第 2 章我们已经讲过。它的实操建议总结成 3 条：</p>
+
+<ol>
+  <li><strong>从最简单的开始</strong>。大多数任务一次 LLM 调用 + RAG 就够。</li>
+  <li><strong>只在必要时升级到 agent</strong>。Agent 用延迟和 token 成本换灵活。</li>
+  <li><strong>避免重抽象框架</strong>。LangChain 风格的 <code>Agent</code>/<code>Chain</code>/<code>Memory</code>
+      基类层叠让调试变难。直接写代码。</li>
+</ol>
+
+<div class="callout research">
+  <span class="label">引文</span>
+  <em>"Frameworks make it easy to get started, but they often add layers of
+  abstraction that can obscure the underlying prompts and responses,
+  making them harder to debug."</em>
+  <p>——Anthropic 这句话直接导致 2025 年大量项目从 LangChain 迁出，转用更简单的脚手架。
+     Hermes 就是这个趋势的样本——它没有 LangChain 式的层叠抽象。</p>
+</div>
+
+<h3>5 种 Workflow 模式</h3>
+
+<p>第 2 章列过，这里再扫一遍，配上业界对应实例：</p>
+
+<table>
+  <thead>
+    <tr><th>模式</th><th>典型实例</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Prompt Chaining</td><td>大多数 "用 GPT 翻译 + 总结" 的脚本</td></tr>
+    <tr><td>Routing</td><td>客服分流、Slack bot 意图分类</td></tr>
+    <tr><td>Parallelization (Sectioning)</td><td>把长文档切段并发总结</td></tr>
+    <tr><td>Parallelization (Voting)</td><td>多模型投票降低单次失误</td></tr>
+    <tr><td>Orchestrator-Workers</td><td>Claude Code review 大 PR（拆给多个 sub-agent）</td></tr>
+    <tr><td>Evaluator-Optimizer</td><td>代码生成跑 lint/test 反馈 + 改</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">13.3</span>Context Engineering：取代 prompt engineering</h2>
+
+<div class="research-card">
+  <div class="ref-label">Industry Concept</div>
+  <div class="ref-title">Effective Context Engineering for AI Agents</div>
+  <div class="ref-meta">Anthropic Engineering · 2025-06 · anthropic.com/engineering/effective-context-engineering-for-ai-agents</div>
+  <p>
+    2025 年中，Anthropic 一篇博客把"prompt engineering"这个词正式淘汰，提出
+    <em>"context engineering"</em>作为继任者。
+  </p>
+  <p>
+    核心论点：<strong>当 Agent 在循环里运行，单次 prompt 不再是最大变量——
+    context window 的管理才是</strong>。
+  </p>
+</div>
+
+<p>Context Engineering 三大杠杆：</p>
+
+<h3>① Compaction</h3>
+
+<p>把过长的对话历史压缩成总结，开新 context window 继续。</p>
+
+<blockquote>
+  Compaction is the practice of taking a conversation nearing the context
+  window limit, summarizing its contents, and reinitiating a new context
+  window with the summary.
+  <footer>Anthropic, 2025-06</footer>
+</blockquote>
+
+<p>第 3 章和第 5 章我们看过 Hermes 的实现。这是<em>"上限"问题</em>的根本解。</p>
+
+<h3>② Just-In-Time Context</h3>
+
+<p>不要预先把所有可能用到的数据塞进 prompt，让 Agent 用工具按需取。
+   prompt 里只放<em>"索引"</em>（文件路径、文档 ID、目录列表），不放内容。</p>
+
+<p>这正是 Claude Code、Cursor、Hermes 都干的事：</p>
+
+<pre><code><span class="c"># 反模式：把所有代码塞进 prompt</span>
+system_prompt = <span class="s">"Here are all 50 files in the repo:\n[200KB of code]"</span>
+
+<span class="c"># JIT 模式：只放索引</span>
+system_prompt = <span class="s">"Repo has these files:\n- src/auth.py\n- src/db.py\n..."</span>
+               <span class="s">"Use read_file to view content."</span></code></pre>
+
+<h3>③ Tool Result Clearing</h3>
+
+<p>用过的工具结果不必永远占着 context。Anthropic 在 2025 把它做成 API 一级功能：
+   你可以告诉 Anthropic API "把 message_id 之前的所有 tool result 清掉，只留 assistant 总结"。</p>
+
+<pre><code>client.messages.<span class="f">create</span>(
+    ...
+    clear_tool_results_above=<span class="s">"msg_abc"</span>,    <span class="c"># 把这条之前的 tool 结果清掉</span>
+)</code></pre>
+
+<p>
+  Hermes 还没用上这个新 API（写作时是 2026.05，刚发布），但代码里已经有类似机制：
+  压缩时优先丢老的 tool result，保留 assistant 的文本总结。
+</p>
+
+<h2 class="section"><span class="secnum">13.4</span>Harness Engineering：超越单一 context</h2>
+
+<div class="research-card">
+  <div class="ref-label">Industry Practice</div>
+  <div class="ref-title">Effective Harnesses for Long-Running Agents</div>
+  <div class="ref-meta">Anthropic Engineering · 2025-Q4</div>
+  <p>
+    2025 年下半年 Anthropic 又推一个新关键词：<em>harness</em>（脚手架）。
+    意思：Agent 不是只有一个循环。复杂任务里，多个 Agent + 多个 context window 协作。
+    "harness"指的是<em>外层那个把 Agent 们组织起来的代码</em>。
+  </p>
+</div>
+
+<p>Anthropic 给出一个具体模式："<strong>双 Agent harness</strong>"：</p>
+
+<ol>
+  <li><strong>Initializer Agent</strong>：第一次跑时设置结构化环境
+      （建目录、装依赖、写 README 模板）。</li>
+  <li><strong>Coding Agent</strong>：每 session 接着上次进度增量推进。</li>
+</ol>
+
+<p>关键洞察：<em>"single agent + 长 context"无法支撑数小时的任务</em>。
+   必须分 session、用 Compaction、用 Skills 把"状态"外化到文件系统而不是 context window。</p>
+
+<p>Anthropic 用这种 harness + Puppeteer 让 Claude 能<em>自动构建生产质量 web 应用</em>。</p>
+
+<div class="callout research">
+  <span class="label">关键发现</span>
+  Anthropic 测试：<em>同一个底层模型 (Claude Opus 4.5)，不同 harness 之间 SWE-Bench Verified 成绩相差 15+ 个百分点</em>。
+  <p>这意味着：<strong>Agent 工程的价值不只是"调好 prompt"</strong>——你的 loop、工具集、
+     context 管理决定了模型实际能发挥多少潜力。</p>
+</div>
+
+<p>对应到 Hermes 的设计：</p>
+
+<ul>
+  <li>Hermes 的 <code>delegate_task</code> 工具 = orchestrator-worker harness 的实现。</li>
+  <li>Hermes 的 cron jobs = 跨 session 长任务的 harness。</li>
+  <li>Hermes 的 Skill + Memory + Curator = 把"状态"外化到文件系统的机制。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">13.5</span>Reasoning Models：把 CoT 内化</h2>
+
+<p>
+  2024 年 9 月 OpenAI o1 发布——第一次让"模型自己想很久再说话"成为 API 协议级别的事。
+  此前 CoT 靠 prompt 引导，o1 之后它<em>是模型本身的能力</em>。
+</p>
+
+<p>关键时间线：</p>
+
+<table>
+  <thead>
+    <tr><th>模型</th><th>发布</th><th>意义</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>OpenAI o1-preview</td><td>2024.09</td><td>第一个 production reasoning model</td></tr>
+    <tr><td>DeepSeek-R1</td><td>2025.01</td><td>第一个开源 reasoning model；推理过程返回</td></tr>
+    <tr><td>OpenAI o3</td><td>2025.01</td><td>o1 之后 5 个月的迭代，逻辑性更强</td></tr>
+    <tr><td>Anthropic Extended Thinking</td><td>2025.02</td><td>Claude 3.7+ 的 reasoning 模式，可配置 thinking_budget</td></tr>
+    <tr><td>Qwen Thinking</td><td>2025</td><td>Alibaba 开源版本</td></tr>
+    <tr><td>Claude Opus 4.5+</td><td>2025-2026</td><td>Reasoning + 高 SWE-Bench 分数</td></tr>
+  </tbody>
+</table>
+
+<h3>对 Agent 工程的影响</h3>
+
+<ol>
+  <li><strong>Reasoning 不能直接 echo</strong>。各厂家协议不一：有的允许 strip 后再发，有的要求严格 echo back。Hermes 的 Provider Profile 处理这些差异（第 4、12 章）。</li>
+  <li><strong>Reasoning content 占 token 但不占用户心智</strong>——它在 provider 那边被 strip 掉再给下一轮。</li>
+  <li><strong>对长程任务有上限提升</strong>：SWE-Bench Verified 上 reasoning 模型比纯对话模型高 5–10 pp。</li>
+  <li><strong>但延迟和成本显著上升</strong>。Curator 这种"小后台任务"不该用 reasoning model——
+      浪费钱。Hermes 默认 curator 用 Haiku，主对话用 Opus。</li>
+</ol>
+
+<div class="callout">
+  <span class="label">实践指南</span>
+  Reasoning Model 适合：复杂代码任务、数学题、多步逻辑、长程规划。
+  <em>不</em>适合：客服分流、简单总结、UI 描述。
+  最佳实践是<em>多 model 路由</em>——主对话用 reasoning，辅助 task 用普通 chat model。
+  这正是 Hermes 的 auxiliary client 设计的思路。
+</div>
+
+<h2 class="section"><span class="secnum">13.6</span>SWE-Bench Verified：客观标尺</h2>
+
+<p>
+  之前评估 Agent 的好坏靠主观——"Devin demo 看起来很厉害"。2024 年 8 月 OpenAI 推出
+  <em>SWE-Bench Verified</em>，给"代码 Agent"建立了客观标尺。
+</p>
+
+<h3>SWE-Bench Verified 是什么</h3>
+
+<p>500 个被人工核对过、确认<em>真的可解</em>的 GitHub issue。
+   每个 issue 有：</p>
+
+<ul>
+  <li>一个真实 repo snapshot</li>
+  <li>一段问题描述（issue body）</li>
+  <li>"通过"的标准是几个 test cases pass</li>
+</ul>
+
+<p>测试一个 Agent 的方法：把 repo + issue 给它，给它 N 个 token 预算，它生成 patch，
+   跑 test 看 pass。pass 率就是 SWE-Bench 分数。</p>
+
+<h3>2026 年初的成绩</h3>
+
+<table>
+  <thead>
+    <tr><th>系统</th><th>底层模型</th><th>SWE-Bench Verified</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Claude Opus 4.5</td><td>Anthropic 自家</td><td><strong>80.9%</strong></td></tr>
+    <tr><td>Claude Opus 4.6 / 4.7</td><td>Anthropic 自家</td><td>80.8% / 80.0%+</td></tr>
+    <tr><td>GPT-5.2</td><td>OpenAI 自家</td><td>80.0%</td></tr>
+    <tr><td>Cursor (with Sonnet 4.6)</td><td>Sonnet 4.6</td><td>65.7%</td></tr>
+    <tr><td>Devin 2.0</td><td>Mixed</td><td>45.8%</td></tr>
+  </tbody>
+</table>
+
+<h3>三个值得讨论的事实</h3>
+
+<p><strong>事实 1：80% 看起来很高，但...</strong></p>
+
+<p>SWE-Bench Verified 是<em>"被人工挑过的可解题"</em>。真实生产里很多 bug 模糊、要域知识、
+   要跨 repo 上下文——SWE-Bench 测不到这些。
+   <strong>80% 是上限的乐观估计</strong>，不是日常工作水平。</p>
+
+<p><strong>事实 2：Harness vs 模型同等重要</strong>。</p>
+
+<p>Cursor 用 Sonnet 4.6 拿 65.7%。同时直接 Sonnet API 跑 SWE-Bench（用 SWE-Agent harness）
+   分数明显更低。同样的模型差<em>~15 pp</em>。这是因为 Cursor 有<em>更好的 harness</em>：
+   it 知道怎么切 task、怎么 review、怎么 prompt cache。</p>
+
+<p><strong>事实 3：Devin 落后</strong>。</p>
+
+<p>2024 年初 Devin 发 demo 视频引发轰动，估值数十亿。2026 年 SWE-Bench Verified 才 45.8%——
+   远低于 Cursor 和 Claude Code。原因不是模型不行（它用 GPT），而是 harness 设计选择
+   优化了 demo 表演而非真实 throughput。</p>
+
+<div class="callout warn">
+  <span class="label">营销陷阱</span>
+  下次有团队说"我们做了一个能干一切的 AI 软件工程师"，先问<em>SWE-Bench Verified 分数</em>。
+  没有就是没做。有但低就是没做好。Devin 是这个领域最贵的"demo vs reality"教训。
+</div>
+
+<h2 class="section"><span class="secnum">13.7</span>2026 Benchmark 6 件套</h2>
+
+<p>
+  SWE-Bench Verified 只是其中一块。到 2026 年初，<em>"评估 Agent"</em>这件事已经成熟到
+  有一套约定俗成的 benchmark 组合。如果你做 Agent，知道这 6 个测的是<em>不同维度</em>——
+  没有哪个能单独衡量"Agent 强不强"。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Industry Benchmarks</div>
+  <div class="ref-title">2026 Agent Benchmark Suite</div>
+  <div class="ref-meta">aggregated · benchmarkingagents.com · METR · Sierra · OSWorld team</div>
+  <p>
+    截至 2026 年 4 月，业界基本共识：6 个 benchmark 各测一个不同能力维度。
+    上榜模型在某些 benchmark 高分、其他低分是常态。
+    <em>没有任何一个 benchmark 能单独决定"哪个 Agent 更好"</em>。
+  </p>
+</div>
+
+<table>
+  <thead>
+    <tr><th>Benchmark</th><th>测什么</th><th>2026 SOTA</th><th>主用场景</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>SWE-Bench Verified</strong></td>
+      <td>真实 GitHub bug 修复</td>
+      <td>~80%</td>
+      <td>代码 Agent 评估</td>
+    </tr>
+    <tr>
+      <td><strong>τ²-Bench</strong> (Sierra)</td>
+      <td>多轮工具调用 + 政策遵守</td>
+      <td>~60%</td>
+      <td>客服、企业 Agent</td>
+    </tr>
+    <tr>
+      <td><strong>OSWorld</strong></td>
+      <td>真实桌面 GUI 任务</td>
+      <td>~35–40%</td>
+      <td>Computer Use / Operator</td>
+    </tr>
+    <tr>
+      <td><strong>GAIA</strong></td>
+      <td>开放领域通用助手</td>
+      <td>~70%</td>
+      <td>通用 reasoning + 工具</td>
+    </tr>
+    <tr>
+      <td><strong>WebArena</strong></td>
+      <td>多步浏览器任务</td>
+      <td>~50%</td>
+      <td>Web Agent</td>
+    </tr>
+    <tr>
+      <td><strong>METR HCAST</strong></td>
+      <td>能持续多长任务（Time Horizon）</td>
+      <td>~2 小时</td>
+      <td>长程任务能力</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>τ²-Bench：企业最关心的那个</h3>
+
+<p>
+  Sierra 公司（前 Salesforce CEO 创办）推的 benchmark。模拟客服场景：
+  另一个 LLM 扮演用户，Agent 必须既完成任务、又遵守<em>书面 policy</em>（"退款 ≤ 30 天才允许"等）。
+</p>
+
+<p>测什么：</p>
+
+<ul>
+  <li><strong>多轮工具调用</strong>：客户问 "帮我退款" → Agent 查订单、检查 policy、决定是否办、办理。</li>
+  <li><strong>Policy adherence</strong>：硬性规则不能被用户绕过。"你必须给我退款"——Agent 该说 no 时说 no。</li>
+  <li><strong>对话健壮性</strong>：用户改主意、说错、补充信息——Agent 得能处理。</li>
+</ul>
+
+<p>τ²-Bench 比 SWE-Bench<em>更难</em>。SWE-Bench 测的是"解题"——给定固定输入找答案；
+   τ²-Bench 测的是"操作"——多轮交互且要符合规则。企业落地 Agent 时关心的就是这个。</p>
+
+<h3>OSWorld：最诚实的那个</h3>
+
+<p>
+  OSWorld 让 Agent 在<em>真实 Ubuntu 桌面</em>里完成任务："在 LibreOffice 里改一个文档的格式"、
+  "用 Chrome 找到某网站的隐藏菜单并点击"。准确率怎么算？<em>看文件最终状态</em>——
+  你要么真的改了文件、要么没改。没法靠 prompt engineering "蒙混过关"。
+</p>
+
+<p>2026.04 数据：SOTA ~35%。<em>这是真实世界 GUI Agent 的天花板</em>——
+   离实用还有距离。Anthropic Computer Use、OpenAI Operator、Google Project Mariner 都在这上面竞争。</p>
+
+<div class="callout research">
+  <span class="label">数据警告</span>
+  benchmarkingagents.com 2026 分析指出：
+  <em>"Top scores cluster between 74–94% on easier suites, but those numbers are inflated by
+  5–15 points by contamination, scaffolding, and single-run reporting."</em>
+  <p>看 benchmark 分数务必注意：(1) 是否多次跑取平均；(2) 是否用了 oracle test selection；
+     (3) 训练集污染。<strong>低 10 分</strong>看待官方数字基本不会出错。</p>
+</div>
+
+<h3>METR HCAST：时间地平线</h3>
+
+<p>
+  METR (Model Evaluation &amp; Threat Research) 的 HCAST (Human-Compared Agent Skill Test) 不是
+  传统 benchmark——它测的是 <em>"Agent 能持续多长时间不偏离"</em>。
+  把任务按"人类专家做完需要多少时间"分级，看 Agent 在每个级别的成功率。
+</p>
+
+<p>2026 早期数据：</p>
+
+<ul>
+  <li>15 分钟以内任务：~80% 成功率</li>
+  <li>1 小时任务：~50%</li>
+  <li>4 小时任务：~20%</li>
+  <li>1 天任务：&lt; 10%</li>
+</ul>
+
+<p>METR 据此预测 <em>"Agent 能做的任务时长每 7 个月翻倍"</em>。这是当前 AGI 路径
+   最被引用的实证趋势之一——比 benchmark 分数更说明问题。</p>
+
+<h2 class="section"><span class="secnum">13.8</span>Multi-Agent Framework 大洗牌（2025–2026）</h2>
+
+<p>
+  2023–2024 年 multi-agent framework 百花齐放：AutoGen、CrewAI、Swarm、LangGraph、
+  ag2、Agno……到 2026 年发生了显著洗牌。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Industry Update</div>
+  <div class="ref-title">Multi-agent Framework Shakeout 2025–2026</div>
+  <div class="ref-meta">2026.04</div>
+  <p>
+    <strong>OpenAI Swarm</strong> 在 2025.03 archive，官方推 Agents SDK；
+    <strong>Microsoft AutoGen</strong> 在 2026 年初转 maintenance mode，被新的
+    <strong>Microsoft Agent Framework (MAF) 1.0</strong> 取代（2026.04 发布）；
+    <strong>LangGraph</strong> 仍是生产级首选；<strong>CrewAI</strong> 在 prototype 阶段流行
+    但生产里常被换成 LangGraph。
+  </p>
+</div>
+
+<h3>四种心智模型</h3>
+
+<p>这些 framework 看似都做"multi-agent"，但底层抽象完全不同：</p>
+
+<table>
+  <thead>
+    <tr><th>Framework</th><th>核心抽象</th><th>适合</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>LangGraph</td>
+      <td><strong>Graph</strong>：StateGraph + 节点 + 条件边 + checkpointer</td>
+      <td>复杂分支 / 可恢复工作流 / 生产级 observability</td>
+    </tr>
+    <tr>
+      <td>AutoGen / AG2 / MAF</td>
+      <td><strong>Actor</strong>：异步 message passing</td>
+      <td>对话型 multi-agent / 研究</td>
+    </tr>
+    <tr>
+      <td>CrewAI</td>
+      <td><strong>Role + Task + Process</strong></td>
+      <td>快速 prototype / 业务流编排</td>
+    </tr>
+    <tr>
+      <td>OpenAI Agents SDK</td>
+      <td><strong>Handoff</strong>：delegation 本身是 primitive</td>
+      <td>OpenAI 生态深度集成</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Hermes 不属于上面任何一类</h3>
+
+<p>
+  Hermes 是<em>具体 Agent 产品</em>，不是 framework。它内部用 orchestrator-workers 模式
+  （<code>delegate_task</code> 工具），但没暴露成"我是 multi-agent framework"。
+</p>
+
+<p>这种<em>"产品先于 framework"</em>的路线是 Anthropic Building Effective Agents 文章里推崇的。
+   选 framework 时建议：</p>
+
+<ul>
+  <li>需要<em>"持久化、可恢复、有 observability 的生产工作流"</em> → LangGraph</li>
+  <li>需要<em>"研究型多 Agent 协作"</em> → MAF / AG2</li>
+  <li>需要<em>"快速 prototype 一个 demo"</em> → CrewAI / Agents SDK</li>
+  <li>已经在做<em>"产品级 Agent，不需要新 framework"</em> → 学 Hermes 这种直接写循环 + 工具字典的形态</li>
+</ul>
+
+<h3>"少 framework，多代码"的拐点</h3>
+
+<p>2026 年业界一个明显趋势：<em>从 framework 信仰回到 first-principles 代码</em>。
+   原因：</p>
+
+<ul>
+  <li>Framework 的抽象在调试时<em>遮蔽底层 prompt</em>，bug 难定位。</li>
+  <li>Framework 升级会破坏现有 agent，被绑定。</li>
+  <li>核心循环本身只有 100–500 行——直接写更清楚。</li>
+</ul>
+
+<p>
+  Hermes 是这条路线的<em>样本</em>。它内部没用 LangGraph / AutoGen / 任何 framework，
+  全部是直接的 Python 循环 + dict + Provider profile。这本书前 12 章拆的就是这套代码。
+</p>
+
+<h2 class="section"><span class="secnum">13.9</span>Agent RL：把工程经验"训"进模型</h2>
+
+<p>
+  到 2026 年，<em>"用 RL 把 Agent 行为训进模型"</em>成为新的研究主线。这事 2025 年初由 DeepSeek-R1 引爆，
+  现在每家都在做。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Foundational Paper</div>
+  <div class="ref-title">DeepSeek-R1: Incentivizing Reasoning Capability via RL</div>
+  <div class="ref-meta">DeepSeek · arXiv:2501.12948 · 2025.01</div>
+  <p>
+    DeepSeek-R1 用 <strong>GRPO (Group Relative Policy Optimization)</strong>——
+    一种简化版 PPO（去掉 critic）。配合 multi-stage 训练：
+    cold-start SFT → reasoning-oriented RL → rejection sampling 生成新 SFT → 二次 RL。
+  </p>
+  <p>
+    意义：第一次<em>不依赖大量人工标注</em>就训出 reasoning 能力。GRPO 之后被 R2、Qwen Thinking、Kimi Reasoning 等大量采用，2026 成事实标准。
+  </p>
+</div>
+
+<h3>2026 主流 post-training 算法</h3>
+
+<table>
+  <thead>
+    <tr><th>算法</th><th>来源</th><th>核心思想</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>GRPO</strong></td><td>DeepSeek</td><td>用同组 rollout 平均当 baseline，去掉 critic 网络</td></tr>
+    <tr><td><strong>DAPO</strong></td><td>各家改进</td><td>解决 GRPO 在长 trace 上的梯度方差问题</td></tr>
+    <tr><td><strong>RLVR</strong></td><td>Verifiable Reward RL</td><td>奖励函数完全靠"对/错"验证（数学、代码）</td></tr>
+    <tr><td><strong>RLAIF</strong></td><td>Anthropic</td><td>用 AI 评价替代人类反馈</td></tr>
+  </tbody>
+</table>
+
+<h3>对 Agent 工程的影响</h3>
+
+<p>关键认知转变：<strong>很多"agent loop 里的工程技巧"以后会被训进模型</strong>。</p>
+
+<ul>
+  <li>第 3 章讲的<em>"幻觉工具名 retry"</em>——R1 之后的模型自己学会"先确认工具存在"。</li>
+  <li>第 4 章讲的<em>"reasoning content 处理"</em>——未来 reasoning 可能更"安静"，不需要 echo。</li>
+  <li>Tool use 准确率本身在被 RL 训练（如 <em>RL-trained tool use</em> 系列论文）。</li>
+</ul>
+
+<div class="callout">
+  <span class="label">趋势</span>
+  <em>2024 时代</em>的 agent 工程 = 写大量 prompt + harness 弥补模型不足。
+  <em>2026 时代</em>的趋势 = 模型自己变强（GRPO 训完更会用工具），harness 简化。
+  长期看，Hermes 这种"3589 行 conversation_loop"会变薄——很多边界条件以后
+  模型层面就处理掉了。<strong>不过短期 1–2 年内，harness 工程仍是高回报投入</strong>。
+</div>
+
+<h2 class="section"><span class="secnum">13.10</span>Agent Skills 标准化（2025.12+）</h2>
+
+<p>
+  本书第 8 章把 SKILL.md 当作 Hermes 的内部约定来讲。但<em>2025 年 12 月一个重大事件改写了这个定位</em>。
+</p>
+
+<div class="research-card">
+  <div class="ref-label">Industry Standard</div>
+  <div class="ref-title">Anthropic Agent Skills Specification</div>
+  <div class="ref-meta">Anthropic · 2025.12 · github.com/anthropics/skills</div>
+  <p>
+    Anthropic 在 2025 年 12 月把 SKILL.md 格式作为<em>开放标准</em>发布。
+    OpenAI 在两周内宣布 Codex CLI 和 ChatGPT 采用同样格式。
+  </p>
+  <p>
+    意义：你写一份 SKILL.md，<strong>Claude / ChatGPT / Codex / Cursor / Hermes
+    都能直接用</strong>。这是 MCP 之后第二个跨厂家 Agent 标准。
+  </p>
+</div>
+
+<h3>影响</h3>
+
+<ol>
+  <li>
+    <strong>Hermes 的 SKILL.md 设计被"追认"</strong>。
+    本书 ch08 讲的 frontmatter、When to Use / NOT to Use、scripts/ 目录——
+    这些原本是 Hermes 内部约定，现在变成跨工具标准。
+  </li>
+  <li>
+    <strong>商业模式出现</strong>。<a href="https://skillsmp.com">skillsmp.com</a>、
+    <a href="https://agensi.io">agensi.io</a> 等 marketplace 允许付费 skill，
+    创作者拿 80%。"我的 git skill 在 Cursor / Claude / Hermes 都能用并收费"成为现实。
+  </li>
+  <li>
+    <strong>Pre-built skills 出现</strong>。Anthropic 自己发布 PowerPoint / Excel / Word / PDF 处理 skill。
+    它们和你自己写的 skill 走同样机制——模型按需调用。
+  </li>
+  <li>
+    <strong>Plugin marketplace 整合</strong>。Claude Code 的 <code>/plugin</code> 命令现在
+    既装 MCP server 也装 Skill 也装 plugin，三合一。
+  </li>
+</ol>
+
+<h3>Skill 与 MCP 的分工</h3>
+
+<table>
+  <thead>
+    <tr><th></th><th>MCP Server</th><th>Agent Skill</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>形态</td><td>外部进程（JSON-RPC）</td><td>SKILL.md + scripts 文件</td></tr>
+    <tr><td>暴露</td><td>Tools / Resources / Prompts</td><td>决策手册 + 可选脚本</td></tr>
+    <tr><td>适合</td><td>需要外部 API 调用、复杂状态</td><td>纯 prompt 经验 + 简单脚本</td></tr>
+    <tr><td>例子</td><td>GitHub MCP（调 GitHub API）</td><td>commit-message 风格手册</td></tr>
+  </tbody>
+</table>
+
+<p>简单理解：<em>MCP = "接什么外部系统"，Skill = "怎么用这些系统"</em>。两者互补。</p>
+
+<h2 class="section"><span class="secnum">13.11</span>Prompt Injection 攻防演进</h2>
+
+<p>2024 年的 prompt injection 防御靠 "请忽略恶意指令" 这种 prompt 教导。<em>2025–2026 全面进入实证攻防时代</em>。</p>
+
+<div class="research-card">
+  <div class="ref-label">Benchmark</div>
+  <div class="ref-title">InjecAgent + AgentDojo</div>
+  <div class="ref-meta">ACL Findings 2024 + arXiv:2406.13352 · 2024–2025</div>
+  <p>
+    InjecAgent 测：让网页里的隐藏文字让 Agent 做坏事。
+    基线 ReAct + GPT-4：<strong>24% 被骗</strong>；加强攻击（attack-tuning）：<strong>47% 被骗</strong>。
+    AgentDojo 现在被 US/UK AI Safety Institute 用做官方评估。
+  </p>
+</div>
+
+<div class="research-card">
+  <div class="ref-label">Defense Paper</div>
+  <div class="ref-title">Tool Firewall: Indirect Prompt Injections Defense</div>
+  <div class="ref-meta">arXiv:2510.05244 · 2025.10</div>
+  <p>
+    提出 <strong>双 firewall 模式</strong>：
+  </p>
+  <ul>
+    <li><strong>Tool-Input Firewall (Minimizer)</strong>：在工具调用前，把 user query 中"和任务无关的额外指令"剥掉。</li>
+    <li><strong>Tool-Output Firewall (Sanitizer)</strong>：工具返回结果中"看起来像 prompt 的内容"包装成数据标记。</li>
+  </ul>
+  <p>
+    在 AgentDojo / Agent Security Bench / InjecAgent / τ-Bench 4 大 benchmark 上拿满分，
+    且不显著降低 utility。
+  </p>
+</div>
+
+<div class="research-card">
+  <div class="ref-label">Attack Paper</div>
+  <div class="ref-title">ChatInject: Abusing Chat Templates for Prompt Injection</div>
+  <div class="ref-meta">ICLR 2026 · github.com/hwanchang00/ChatInject</div>
+  <p>
+    新攻击向量：利用 chat template 的<em>角色边界标记</em>（如 <code>&lt;|im_start|&gt;</code>、
+    <code>[INST]</code>）注入虚假 system message。
+    在 InjecAgent 上让强 model 防御率掉 50+ pp。
+  </p>
+  <p>
+    防御启示：<em>所有外部内容必须先做 chat-template-escape</em>。Hermes 的
+    <code>_sanitize_tool_error</code>（第 6 章）就是这种思路的早期实现。
+  </p>
+</div>
+
+<h3>Hermes 已经做到 / 还要补的</h3>
+
+<p>Hermes 当前的安全机制（第 7 章）：</p>
+
+<ul>
+  <li>✓ <strong>Toolset 限制</strong>（webhook safe set）—— Tool-Input Firewall 的核心。</li>
+  <li>✓ <strong>命令审批</strong>—— 危险工具用人工二次确认。</li>
+  <li>✓ <strong>错误清洗</strong>（_sanitize_tool_error）—— 类似 Tool-Output Sanitizer。</li>
+  <li>⚠ <strong>Minimizer 不完整</strong>—— Hermes 还没专门"提取 user query 的最小有效指令"机制。</li>
+  <li>⚠ <strong>Chat-template 转义</strong>—— 没专门处理。</li>
+</ul>
+
+<p>2026 年 Agent 安全的<em>"做了 vs 没做"</em>分水岭就在这两条。
+   你做生产 Agent 必须把它们补全。</p>
+
+<h2 class="section"><span class="secnum">13.12</span>MCP — 工具的 USB-C</h2>
+
+<div class="research-card">
+  <div class="ref-label">Industry Protocol</div>
+  <div class="ref-title">Model Context Protocol (MCP)</div>
+  <div class="ref-meta">Anthropic · 2024-11 · modelcontextprotocol.io</div>
+  <p>
+    一个开放标准，定义"AI 应用 (host) 怎么和外部数据/工具/系统 (server) 通信"。
+    Anthropic 11 月发布，2025–2026 大量被采用：OpenAI、Google DeepMind、Microsoft
+    都接入。<em>已经是工具接入领域的事实标准</em>。
+  </p>
+</div>
+
+<h3>MCP 的三层架构</h3>
+
+<table>
+  <thead>
+    <tr><th>角色</th><th>含义</th><th>典型例子</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Host</td><td>用 LLM 的 AI 应用</td><td>Claude Desktop, Cursor, Hermes</td></tr>
+    <tr><td>Client</td><td>host 内部的协议库</td><td>各家自实现</td></tr>
+    <tr><td>Server</td><td>暴露 capabilities 的外部进程</td><td>GitHub MCP Server, Slack MCP Server, 各种数据库 MCP</td></tr>
+  </tbody>
+</table>
+
+<h3>三种 capabilities</h3>
+
+<ol>
+  <li><strong>Tools</strong>：可被 LLM 调用的函数（最常见）。schema 是 JSON Schema 子集。</li>
+  <li><strong>Resources</strong>：可读取的数据（文件、API 响应）。用 URI 寻址。</li>
+  <li><strong>Prompts</strong>：可参数化的 prompt 模板。</li>
+</ol>
+
+<h3>MCP 协议本身</h3>
+
+<p>基于 JSON-RPC 2.0。传输方式：</p>
+
+<ul>
+  <li><strong>stdio</strong>：host 起子进程，stdin/stdout 通信。最常见。</li>
+  <li><strong>HTTP+SSE</strong>：远程 MCP server，给团队级共享。</li>
+</ul>
+
+<p>核心 RPC 方法：</p>
+
+<pre><code><span class="c"># Host → Server</span>
+{<span class="s">"method"</span>: <span class="s">"initialize"</span>, ...}                <span class="c"># 握手 + capability 协商</span>
+{<span class="s">"method"</span>: <span class="s">"tools/list"</span>}                    <span class="c"># 拿工具清单</span>
+{<span class="s">"method"</span>: <span class="s">"tools/call"</span>,
+ <span class="s">"params"</span>: {<span class="s">"name"</span>: <span class="s">"foo"</span>, <span class="s">"arguments"</span>: {...}}}
+{<span class="s">"method"</span>: <span class="s">"resources/list"</span>}
+{<span class="s">"method"</span>: <span class="s">"resources/read"</span>, <span class="s">"params"</span>: {<span class="s">"uri"</span>: <span class="s">"file://..."</span>}}
+
+<span class="c"># Server → Host（事件推送）</span>
+{<span class="s">"method"</span>: <span class="s">"notifications/tools/list_changed"</span>}  <span class="c"># 工具变了请重读</span></code></pre>
+
+<h3>生态状态（2026.05）</h3>
+
+<ul>
+  <li>官方 server：Filesystem、GitHub、Slack、Brave Search、Sentry、Memory、PostgreSQL 等。</li>
+  <li>社区 server：数千个，几乎覆盖所有常用 SaaS。</li>
+  <li>SDK 覆盖：Python、TypeScript、Java、Go、C#。</li>
+  <li>主要 host：Claude Desktop、Cursor、Zed、VS Code (Continue 扩展)、Hermes、Aider。</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">实战建议</span>
+  你写一个工具，<strong>选 MCP server 而不是单一 host 集成</strong>。
+  一份代码，所有主流 host 都用。投入 / 受益比远比"只接 Claude Desktop"或"只接 Cursor"高。
+  本书第 14 章会带你写一个最简 MCP server。
+</div>
+
+<h3>2025 年 MCP 的演进</h3>
+
+<p>Anthropic 在 2025 年中发了 <em>"Code Execution with MCP"</em>——
+   把"代码执行"也搬到 MCP server 里，让 Agent 写代码直接调 MCP server 的 sandbox 执行。
+   比每次让 Agent 写 inline code 安全得多。</p>
+
+<h2 class="section"><span class="secnum">13.13</span>Anthropic Computer Use 与多模态 Agent</h2>
+
+<p>
+  2024 年 10 月 Anthropic 让 Claude 3.5 Sonnet 公测 <em>computer use</em>。
+  能直接看屏幕截图、动鼠标、敲键盘。从此"Agent 真的能干 GUI 任务"从 demo 变成 API。
+</p>
+
+<p>对工程的启示：</p>
+
+<ul>
+  <li>Vision-as-tool 的 schema 像这样：
+      <pre><code>{<span class="s">"name"</span>: <span class="s">"computer_use"</span>,
+ <span class="s">"parameters"</span>: {
+   <span class="s">"action"</span>: <span class="s">"screenshot"</span> <span class="k">|</span> <span class="s">"click"</span> <span class="k">|</span> <span class="s">"type"</span> <span class="k">|</span> <span class="s">"scroll"</span>,
+   <span class="s">"coordinate"</span>: [x, y],
+   ...
+ }}</code></pre>
+  </li>
+  <li>Hermes 在 macOS 上接 <code>cua-driver</code>，整合一个 <code>computer_use</code> 工具到 toolset。</li>
+  <li>多模态消息格式上：vision 工具的输出（截图）作为 base64 image 嵌进 tool result。
+      下一轮 LLM 直接"看"这张图。</li>
+</ul>
+
+<p>未解决的难题：</p>
+
+<ul>
+  <li><strong>准确率仍然不高</strong>。普通 web 任务 50% 左右成功率。</li>
+  <li><strong>延迟高</strong>。每步都要发截图、模型分析、动作。</li>
+  <li><strong>安全</strong>。AI 自己控制鼠标键盘，错点了不可逆。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">13.14</span>研究脉络回顾：Voyager → 现代 Skill 范式</h2>
+
+<p>从 Voyager 到 2026 年，Skill / Memory 研究的关键论文：</p>
+
+<table>
+  <thead>
+    <tr><th>论文 / 工作</th><th>时间</th><th>核心贡献</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>ReAct</td><td>2022.10</td><td>thought-action-observation 循环</td></tr>
+    <tr><td>Generative Agents</td><td>2023.04</td><td>Memory stream + reflection</td></tr>
+    <tr><td>ToolFormer</td><td>2023.02</td><td>Self-supervised tool use 训练</td></tr>
+    <tr><td>Reflexion</td><td>2023.03</td><td>Self-critique + retry</td></tr>
+    <tr><td>Voyager</td><td>2023.05</td><td>Skill library + 自动课程</td></tr>
+    <tr><td>Tree of Thoughts</td><td>2023.05</td><td>显式搜索树推理</td></tr>
+    <tr><td>AutoGPT/BabyAGI 等</td><td>2023.03-05</td><td>把概念变成 product (但功能弱)</td></tr>
+    <tr><td>MemGPT</td><td>2023.10</td><td>类 OS 的分层 memory</td></tr>
+    <tr><td>SWE-Agent</td><td>2024.04</td><td>第一份 SWE-Bench 严肃尝试</td></tr>
+    <tr><td>Anthropic Computer Use</td><td>2024.10</td><td>多模态 Agent 普及</td></tr>
+    <tr><td>MCP</td><td>2024.11</td><td>工具接入标准化</td></tr>
+    <tr><td>Anthropic Building Effective Agents</td><td>2024.12</td><td>工程范式定形</td></tr>
+    <tr><td>OpenAI o1 / DeepSeek-R1</td><td>2024.09 / 2025.01</td><td>Reasoning models</td></tr>
+    <tr><td>Anthropic Context Engineering 系列</td><td>2025</td><td>Compaction + JIT + tool clearing</td></tr>
+    <tr><td>Anthropic Harness Engineering</td><td>2025</td><td>多 Agent + 多 context window 协作</td></tr>
+    <tr><td>Hermes Agent</td><td>2025-2026</td><td>把以上全部组装进开源 framework</td></tr>
+  </tbody>
+</table>
+
+<h2 class="section"><span class="secnum">13.15</span>2026 还在解决什么</h2>
+
+<p>哪些问题<em>仍未解决</em>？</p>
+
+<h3>① 长程任务的 Cost Control</h3>
+
+<p>
+  一个真实 SWE-Bench 任务跑下来可能花 $5–$20 token 钱。Anthropic Computer Use 一个 GUI
+  任务可能 $30+。<em>怎么做到一次任务 1 美分以下</em>仍是开放问题。
+  Auxiliary 模型路由（让简单步骤用便宜模型）是一条路，但需要更智能的 routing。
+</p>
+
+<h3>② Memory 的 "Catastrophic Inconsistency"</h3>
+
+<p>
+  Agent 跑了三个月，memory 里积累了几百条事实。其中一些过时了
+  ("用户喜欢 Python 2"——他现在用 3)。<em>怎么知道哪些 fact 应该 forget</em>？
+  Curator 是一个方向，但目前的实现是规则化的。更智能的"记忆衰减"需要研究。
+</p>
+
+<h3>③ Trustworthy Multi-Agent Coordination</h3>
+
+<p>
+  你让 5 个 sub-agent 并发工作，怎么保证它们的结果一致、不矛盾？
+  Hermes 用 Kanban 加排他锁，但这只是机械协调。语义层面的协调
+  （"两个 sub-agent 在改同一文件不同地方怎么 merge"）仍开放。
+</p>
+
+<h3>④ Agent 评估的 Tail Cases</h3>
+
+<p>
+  SWE-Bench 80% 是平均。但生产里的 bug 分布是<em>长尾</em>——
+  20% 的 bug 占 80% 的工时。这些 "hard cases" 上 Agent 表现远低于平均。
+  怎么 benchmark 这种长尾，还没有好方法。
+</p>
+
+<h3>⑤ Privacy &amp; Local-First Agent</h3>
+
+<p>
+  现有强 Agent 几乎都依赖 cloud LLM API。
+  但 enterprise / 个人都希望<em>"我的数据不离开机器"</em>。
+  本地 70B 开源模型在 SWE-Bench Verified 上目前 ~30%——和云端 80% 差距大。
+  <em>缩小这个差距</em>是 2026 年开源社区主要方向。
+</p>
+
+<h3>⑥ Agent 的可解释性 / 审计</h3>
+
+<p>
+  Agent 跑了 50 步、调了 20 个工具、得出一个结论——<em>它为什么这么做</em>？
+  Reasoning content 字段是一部分答案，但不够。生产环境需要可审计的"决策树"。
+</p>
+
+<h3>⑦ GUI Agent 的实用化天花板</h3>
+
+<p>
+  OSWorld 2026 年 SOTA 仍在 35–40%。这意味着<em>对真实桌面的"会用"率不到一半</em>。
+  Computer Use / Operator / Mariner 都还在"demo 漂亮、生产无法依赖"阶段。
+  问题不只是模型——动作精度（点中按钮）、状态识别（弹窗 vs 主窗）、错误恢复
+  （误操作怎么回滚）都需要新解法。
+</p>
+
+<h3>⑧ Agent 经济性的两极分化</h3>
+
+<p>
+  按 2026 年 5 月数据：一个 SWE-Bench Verified 任务跑下来用 Claude Opus 4.7 约 $0.50–$3.00；
+  用 Sonnet 4.6 + 好 harness 约 $0.10–$0.50；用 GPT-5.2 约 $0.30–$2.00。
+  企业部署成本因此差几十倍。
+  <em>"用便宜模型 + 好 harness 接近大模型"</em>是当前最有商业价值的研究方向，
+  也是 Cursor / Cognition 等公司的核心 moat。
+</p>
+
+<h3>⑨ Long-Horizon Reliability</h3>
+
+<p>
+  METR HCAST 数据显示 Agent 在 4 小时任务上成功率只有 20%。
+  现实里"做完一个 feature"对人类是 1–3 天的事。<em>Agent 走完一天不偏离</em>仍是开放问题。
+  Anthropic Harness Engineering 是当前最深入的尝试，但还没有谁敢声称
+  "把 Agent 扔在 VPS 上跑一周不监督"。
+</p>
+
+<h3>⑩ Prompt Injection 的"军备竞赛"</h3>
+
+<p>
+  Tool Firewall（13.11）在 benchmark 上拿满分，但 ChatInject (ICLR 2026) 立刻找到新攻击面。
+  这是<em>典型的攻防军备竞赛</em>——不存在"一劳永逸"防御。生产 Agent 必须
+  接受"被骗一定会发生"，然后用 capability limitation 兜底（第 7 章核心论点）。
+</p>
+
+<h2 class="section"><span class="secnum">13.16</span>Hermes 在哪</h2>
+
+<p>把 Hermes 标在这张地图上：</p>
+
+<pre class="mermaid">
+flowchart LR
+  T1["<b>2024.12</b><br/>Building Effective Agents<br/>━━━━━━━━━<br/>5 workflow 模式<br/>augmented LLM<br/>少抽象多代码"]:::milestone
+  T2["<b>2025.06</b><br/>Context Engineering<br/>━━━━━━━━━<br/>Compaction<br/>JIT context<br/>Tool result clearing"]:::milestone
+  T3["<b>2025.Q4</b><br/>Harness Engineering<br/>━━━━━━━━━<br/>双 Agent<br/>多 context window<br/>文件系统状态外化"]:::milestone
+  T4["<b>2026.05</b><br/>Hermes 0.14<br/>━━━━━━━━━<br/>集成以上所有<br/>30 providers · MCP host<br/>Skill + Memory + Curator<br/>20+ 平台"]:::hermes
+  T1 --> T2 --> T3 --> T4
+  T4 -.->|"开源样本"| Conclusion["'工程化共识'<br/>的集大成"]:::concl
+  classDef milestone fill:#fbfaf6,stroke:#8b1538,color:#8b1538
+  classDef hermes fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a,font-weight:bold
+  classDef concl fill:#f0eaf1,stroke:#6b4488,color:#6b4488
+</pre>
+
+<p>把 Hermes 的设计决策对照<em>"这是哪个前沿想法"</em>:</p>
+
+<table>
+  <thead>
+    <tr><th>Hermes 设计</th><th>对应前沿</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>三层 system prompt</td><td>Context Engineering: cache 友好</td></tr>
+    <tr><td>Skill 作为 user message 注入</td><td>Context Engineering: 避免破 cache</td></tr>
+    <tr><td>SKILL.md 文件系统</td><td>Harness: 状态外化到 filesystem</td></tr>
+    <tr><td>delegate_task</td><td>Orchestrator-Workers pattern</td></tr>
+    <tr><td>Curator</td><td>Voyager iterative refinement 的 batched 版</td></tr>
+    <tr><td>Memory + FTS5</td><td>MemGPT archival memory + Generative Agents memory stream</td></tr>
+    <tr><td>MCP host</td><td>2024 标准化协议</td></tr>
+    <tr><td>30 个 ProviderProfile</td><td>OpenAI-compat 事实标准</td></tr>
+    <tr><td>Plugin Hook 体系</td><td>"少抽象多代码" + 扩展点</td></tr>
+  </tbody>
+</table>
+
+<p>结论：<em>Hermes 不是 cutting-edge 研究项目，但它把所有 cutting-edge 工程实践都整合进了一个能跑的开源 framework</em>。
+   这就是为什么本书拿它当 textbook——你看一份代码，学完整个 2024–2026 的工程沉淀。</p>
+
+<h2 class="section"><span class="secnum">13.17</span>本章带走的</h2>
+
+<ul>
+  <li><strong>2024 是转折点</strong>：Function Calling 协议成熟、Computer Use、MCP、Anthropic 指南——Agent 从 demo 走向产品。</li>
+  <li><strong>Workflow vs Agent</strong> 二分法（Anthropic 2024.12）成为业界共识。</li>
+  <li><strong>Context Engineering 取代 Prompt Engineering</strong>。三招：Compaction、JIT context、Tool Result Clearing。</li>
+  <li><strong>Harness Engineering</strong>（2025）：单 Agent 撑不起长任务，需要多 Agent + 多 context window 协作。</li>
+  <li><strong>Reasoning Models</strong>（o1/R1/Extended Thinking）让 CoT 从 prompt 内化到模型。</li>
+  <li><strong>SWE-Bench Verified</strong> 给"代码 Agent"建立客观标尺。80% 是技术天花板，但<em>同模型不同 harness 差 15+ pp</em>——harness 工程极其重要。</li>
+  <li><strong>MCP</strong> 是 2024.11 起的工具接入事实标准。生态有数千 server。写工具优先 MCP server 形式。</li>
+  <li>仍未解决：cost、memory consistency、multi-agent coordination、tail cases、本地化、可审计。</li>
+  <li><strong>Hermes 集大成</strong>了这些工程实践。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      你读完了 Anthropic "Building Effective Agents"（如果还没读，<a href="https://www.anthropic.com/research/building-effective-agents">看这里</a>）。
+      用三句话总结你最受启发的点。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      Context Engineering 三招里，你的工作场景最需要哪一招？为什么？
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      "同模型不同 harness 差 15 pp"——给你一个本地 70B 模型，分数 25%。
+      不能换模型，只能改 harness。你会改哪三件事？理由各 100 字。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      MCP 协议是 JSON-RPC 2.0。实现一个最简 stdio MCP server，暴露一个工具 <code>add</code> 接受 a/b 返回和。
+      只用 Python stdlib，不超过 80 行。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Curator 解决了 skill 库的腐烂。Memory 也会腐烂——半年前的 fact 现在错。
+      读 Generative Agents 的"reflection"机制（arXiv:2304.03442 第 4 节），
+      设计一个"Memory Curator"，把它的 reflection 思想和 Hermes 的状态机思想结合。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Anthropic 推 MCP 让工具标准化，但<em>Agent 之间</em>还没标准化协议。
+      想象一个 "A2A (Agent-to-Agent) Protocol"——让一个 Agent 把任务派给另一个 Agent。
+      写 200 字提案，回答：消息格式、subagent context isolation、predicate of completion、错误回传。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch12-providers-plugins.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 12 章 · Provider 与 Plugin 生态</div>
+  </a>
+  <a class="next" href="ch14-practice.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 14 章 · 动手实践与设计哲学</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 章 · Tool Registry 与发现 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part III · 工具系统
+  <span class="sep">›</span>
+  第 6 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 06</div>
+  <h1>Tool Registry 与发现</h1>
+  <p class="chapter-subtitle">把 LLM 接到外部世界的唯一通道。
+    79 个工具如何不相互打架、不出现幻觉名字、async 怎么和 sync 共存。</p>
+  <div class="meta">
+    <span>本章约 6,800 字</span>
+    <span>阅读 ~30 分钟</span>
+    <span>关键词：registry · auto-discovery · handler · check_fn · async bridging</span>
+  </div>
+</div>
+
+<p class="lead">
+  上一章把 prompt 的事说完了。这一章我们看 prompt 里那个 <code>tools</code> 数组里的每个元素
+  是怎么<em>从一个 Python 函数文件</em>变成<em>给 LLM 看的 schema</em>，再变成<em>被 LLM 调用时的 dispatch</em>。
+  这一整套机制叫"工具系统"。Hermes 的工具系统在 <code>tools/registry.py</code> 和 <code>model_tools.py</code>，
+  约 1500 行。
+</p>
+
+<h2 class="section"><span class="secnum">6.1</span>一个工具的全貌</h2>
+
+<p>先看一个真实工具的完整文件。<code>tools/clarify_tool.py</code>——它的功能是"让 Agent 向用户提问"：</p>
+
+<pre><code><span class="filename">tools/clarify_tool.py（简化到核心 ~50 行）</span>
+<span class="k">import</span> json
+<span class="k">from</span> typing <span class="k">import</span> Optional, List, Callable
+<span class="k">from</span> tools.registry <span class="k">import</span> registry, tool_error
+
+MAX_CHOICES = <span class="num">4</span>
+
+<span class="c"># ─── 1. Handler：实际执行的 Python 函数 ─────────────────</span>
+<span class="k">def</span> <span class="f">clarify_tool</span>(
+    question: str,
+    choices: Optional[List[str]] = <span class="k">None</span>,
+    callback: Optional[Callable] = <span class="k">None</span>,
+) <span class="k">-&gt;</span> str:
+    <span class="s">"""Ask the user a question; optionally with choices."""</span>
+    <span class="k">if</span> <span class="k">not</span> question.<span class="f">strip</span>():
+        <span class="k">return</span> <span class="f">tool_error</span>(<span class="s">"Question text is required."</span>)
+
+    <span class="k">if</span> callback <span class="k">is</span> <span class="k">None</span>:
+        <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"error"</span>: <span class="s">"Clarify not available in this context."</span>})
+
+    user_response = <span class="f">callback</span>(question, choices)
+    <span class="k">return</span> json.<span class="f">dumps</span>({
+        <span class="s">"question"</span>: question,
+        <span class="s">"user_response"</span>: user_response,
+    })
+
+
+<span class="c"># ─── 2. check_fn：判断工具是否可用 ────────────────────</span>
+<span class="k">def</span> <span class="f">check_clarify_requirements</span>() <span class="k">-&gt;</span> bool:
+    <span class="k">return</span> <span class="k">True</span>   <span class="c"># 永远可用</span>
+
+
+<span class="c"># ─── 3. Schema：给 LLM 看的 OpenAI Function 描述 ──────</span>
+CLARIFY_SCHEMA = {
+    <span class="s">"name"</span>: <span class="s">"clarify"</span>,
+    <span class="s">"description"</span>: (
+        <span class="s">"Ask the user a question when you need clarification or a "</span>
+        <span class="s">"decision. Two modes: 1) multiple choice (up to 4); "</span>
+        <span class="s">"2) open-ended. Use when ambiguity blocks progress."</span>
+    ),
+    <span class="s">"parameters"</span>: {
+        <span class="s">"type"</span>: <span class="s">"object"</span>,
+        <span class="s">"properties"</span>: {
+            <span class="s">"question"</span>: {
+                <span class="s">"type"</span>: <span class="s">"string"</span>,
+                <span class="s">"description"</span>: <span class="s">"The question to present."</span>,
+            },
+            <span class="s">"choices"</span>: {
+                <span class="s">"type"</span>: <span class="s">"array"</span>,
+                <span class="s">"items"</span>: {<span class="s">"type"</span>: <span class="s">"string"</span>},
+                <span class="s">"maxItems"</span>: MAX_CHOICES,
+            },
+        },
+        <span class="s">"required"</span>: [<span class="s">"question"</span>],
+    },
+}
+
+
+<span class="c"># ─── 4. 注册：模块导入时自动执行 ───────────────────</span>
+registry.<span class="f">register</span>(
+    name=<span class="s">"clarify"</span>,
+    toolset=<span class="s">"clarify"</span>,
+    schema=CLARIFY_SCHEMA,
+    handler=<span class="k">lambda</span> args, **kw: <span class="f">clarify_tool</span>(
+        question=args.<span class="f">get</span>(<span class="s">"question"</span>, <span class="s">""</span>),
+        choices=args.<span class="f">get</span>(<span class="s">"choices"</span>),
+        callback=kw.<span class="f">get</span>(<span class="s">"callback"</span>),
+    ),
+    check_fn=check_clarify_requirements,
+    emoji=<span class="s">"❓"</span>,
+)</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 6.1</span> 一个工具的完整四件套：handler + check_fn + schema + register 调用</div>
+
+<p>记住这<strong>四件套</strong>——所有 Hermes 工具都长这样：</p>
+
+<ol>
+  <li><strong>Handler</strong>：真正干活的 Python 函数。</li>
+  <li><strong>check_fn</strong>：判断工具是否可用（如环境变量是否设、依赖是否装）。</li>
+  <li><strong>Schema</strong>：给 LLM 的接口契约。</li>
+  <li><strong>register 调用</strong>：模块顶层执行，把四件事都登记到全局 registry。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">6.2</span>Registry：单例注册中心</h2>
+
+<p>所有工具的注册都进同一个全局 dict。<code>tools/registry.py</code>:</p>
+
+<pre><code><span class="filename">tools/registry.py:151-200</span>
+<span class="k">import</span> threading
+<span class="k">from</span> dataclasses <span class="k">import</span> dataclass
+<span class="k">from</span> typing <span class="k">import</span> Callable, Dict
+
+<span class="k">@dataclass</span>
+<span class="k">class</span> <span class="n">ToolEntry</span>:
+    name: str
+    toolset: str
+    schema: dict
+    handler: Callable
+    check_fn: Callable = <span class="k">None</span>
+    requires_env: list = <span class="k">None</span>
+    is_async: bool = <span class="k">False</span>
+    emoji: str = <span class="s">""</span>
+    max_result_size_chars: int = <span class="k">None</span>
+    dynamic_schema_overrides: Callable = <span class="k">None</span>
+
+<span class="k">class</span> <span class="n">ToolRegistry</span>:
+    <span class="s">"""单例 — 收集所有 tool 的 schema + handler。"""</span>
+
+    <span class="k">def</span> <span class="f">__init__</span>(self):
+        self._tools: Dict[str, ToolEntry] = {}
+        self._toolset_checks: Dict[str, Callable] = {}
+        self._lock = threading.<span class="f">RLock</span>()
+        <span class="c"># Generation counter — 每次变更 +1，给 cache 用</span>
+        self._generation: int = <span class="num">0</span></code></pre>
+
+<h3>register 方法的全貌</h3>
+
+<pre><code><span class="filename">tools/registry.py:200-260 (摘要)</span>
+<span class="k">def</span> <span class="f">register</span>(self, name, toolset, schema, handler,
+             check_fn=<span class="k">None</span>, requires_env=<span class="k">None</span>,
+             is_async=<span class="k">False</span>, override=<span class="k">False</span>, ...):
+    <span class="s">"""Register a tool. Called at module-import time by each tool file."""</span>
+    <span class="k">with</span> self._lock:
+        existing = self._tools.<span class="f">get</span>(name)
+
+        <span class="c"># 防意外覆盖：除非显式 override=True</span>
+        <span class="k">if</span> existing <span class="k">and</span> existing.toolset != toolset:
+            both_mcp = (existing.toolset.<span class="f">startswith</span>(<span class="s">"mcp-"</span>)
+                        <span class="k">and</span> toolset.<span class="f">startswith</span>(<span class="s">"mcp-"</span>))
+            <span class="k">if</span> both_mcp:
+                <span class="c"># MCP 之间的覆盖正常（server 重连刷新工具）</span>
+                logger.<span class="f">debug</span>(<span class="s">"MCP overwriting MCP for %s"</span>, name)
+            <span class="k">elif</span> override:
+                logger.<span class="f">info</span>(<span class="s">"%s: '%s' override '%s' (explicit)"</span>,
+                            name, toolset, existing.toolset)
+            <span class="k">else</span>:
+                logger.<span class="f">error</span>(<span class="s">"Tool '%s' REJECTED: would shadow toolset '%s'"</span>,
+                              name, existing.toolset)
+                <span class="k">return</span>
+
+        self._tools[name] = <span class="f">ToolEntry</span>(
+            name=name, toolset=toolset, schema=schema, handler=handler,
+            check_fn=check_fn, ...)
+
+        <span class="k">if</span> check_fn <span class="k">and</span> toolset <span class="k">not</span> <span class="k">in</span> self._toolset_checks:
+            self._toolset_checks[toolset] = check_fn
+
+        self._generation += <span class="num">1</span>
+
+<span class="c"># 模块级单例</span>
+registry = <span class="f">ToolRegistry</span>()</code></pre>
+
+<p>四个值得深挖的设计决策：</p>
+
+<h3>① RLock 而不是普通 Lock</h3>
+
+<p>
+  MCP server 可以在运行时刷新它的工具列表（比如 GitHub 加了新 API）。
+  Hermes 的 MCP 客户端会调 <code>registry.register()</code> 更新。
+  与此同时，主 Agent 循环可能正在调 <code>registry.get_definitions()</code> 读 schema。
+  <em>读写竞争必须用锁</em>。
+</p>
+
+<p>用 <code>RLock</code>（可重入）是因为有些路径在持锁状态下又调了别的同样需要锁的方法。
+   普通 Lock 会死锁。</p>
+
+<h3>② _generation 计数器</h3>
+
+<p>外部缓存（比如 schema 的 OpenAI 兼容包装）需要知道 registry 啥时候变了。
+   每次 mutation 把 <code>_generation += 1</code>，外部就拿这个数当 cache key。
+   命中就是字典查找，不命中就重算。<em>不需要外部主动 invalidate</em>。</p>
+
+<pre><code><span class="c"># 调用方代码（model_tools.py）</span>
+cache_key = (
+    <span class="f">frozenset</span>(enabled_toolsets),
+    registry._generation,        <span class="c">## ← 这一行</span>
+    config_mtime,
+)
+cached = _tool_defs_cache.<span class="f">get</span>(cache_key)
+<span class="k">if</span> cached <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+    <span class="k">return</span> cached
+<span class="c"># 否则重算</span></code></pre>
+
+<h3>③ override 显式打开</h3>
+
+<p>
+  Plugin 想替换一个内置工具（比如换一个更强的 <code>browser_navigate</code> 实现）？
+  必须传 <code>override=True</code>。否则 Hermes 拒绝，并在 log 里大声警告。
+  这条规则是<em>防止 plugin 互相意外覆盖</em>——一个用户装了两个声明 browser 工具的 plugin，
+  没有 override 强制，谁先装谁赢，bug 隐蔽且难调。
+</p>
+
+<h3>④ MCP 互相覆盖默认允许</h3>
+
+<p>
+  两个 MCP server 都暴露 <code>read_file</code>？前面注册的会被后面注册的覆盖，但 log 是 debug 级。
+  原因是<em>MCP 重连时会刷新整套工具</em>——你不想每次重连都出 ERROR 日志。
+</p>
+
+<h2 class="section"><span class="secnum">6.3</span>自动发现</h2>
+
+<p>问题：谁来 import 这些 tool 文件？让用户在某个 <code>__init__.py</code> 里维护 79 个 import？</p>
+
+<p>Hermes 的回答：<em>自动扫描，按文件名导入</em>。在 <code>model_tools.py</code> 第 180 行：</p>
+
+<pre><code><span class="filename">model_tools.py:180</span>
+<span class="c"># 触发整个 tools/ 目录扫描，每个 .py 文件被 import 一次</span>
+<span class="f">discover_builtin_tools</span>()</code></pre>
+
+<p><code>discover_builtin_tools()</code> 内部做的事：</p>
+
+<pre><code><span class="filename">model_tools.py (节选)</span>
+<span class="k">def</span> <span class="f">discover_builtin_tools</span>():
+    <span class="s">"""扫描 tools/*.py 并 import，触发模块顶层的 registry.register() 调用。"""</span>
+    tools_dir = Path(<span class="f">__file__</span>).parent / <span class="s">"tools"</span>
+    <span class="k">for</span> tool_file <span class="k">in</span> tools_dir.<span class="f">glob</span>(<span class="s">"*.py"</span>):
+        <span class="k">if</span> tool_file.<span class="f">startswith</span>(<span class="s">"_"</span>): <span class="k">continue</span>          <span class="c"># skip _utils.py 等</span>
+        module_name = <span class="f">f</span><span class="s">"tools.{tool_file.stem}"</span>
+        <span class="k">try</span>:
+            importlib.<span class="f">import_module</span>(module_name)
+        <span class="k">except</span> Exception <span class="k">as</span> e:
+            logger.<span class="f">warning</span>(<span class="s">"Failed to import %s: %s"</span>, module_name, e)
+            <span class="c"># 一个 tool import 失败不该挂掉整个 Agent</span>
+            <span class="k">continue</span></code></pre>
+
+<p>关键设计：</p>
+
+<ul>
+  <li><strong>一个 import 失败不影响其他</strong>：用 try/except，warning 即可。</li>
+  <li><strong>下划线开头跳过</strong>：约定 <code>_utils.py</code> 这种辅助文件不是工具。</li>
+  <li><strong>模块级 register</strong>：tool 文件被 import 的副作用就是注册。
+      你不用显式调 init 函数。</li>
+</ul>
+
+<h3>为什么这种"魔法"可以接受</h3>
+
+<p>"模块级副作用"在 Python 圈通常被视为<em>反模式</em>——容易出隐藏 bug。
+   但工具发现是少数合理的例外：</p>
+
+<ol>
+  <li>规则简单：<em>所有 tools/*.py 都会被 import，模块顶层调 register</em>。</li>
+  <li>不会引入循环依赖：tool 文件只依赖 <code>tools.registry</code> 和标准库。</li>
+  <li>排查容易：log 里有 "Failed to import" 警告。</li>
+  <li>替代方案更糟：维护一份 79 项的显式 import 列表，每次加工具都要改两处。</li>
+</ol>
+
+<div class="callout tip">
+  <span class="label">设计教训</span>
+  当"自动发现"的规则足够简单（一个目录、一种 import 模式、一次副作用），
+  收益 > 风险。但如果规则复杂（要看注解、要看类继承），还是退回显式注册更可靠。
+</div>
+
+<h2 class="section"><span class="secnum">6.4</span>Plugin 工具：另一条注册路径</h2>
+
+<p>
+  上面是 <em>内置工具</em>的注册路径。Plugin 工具走另一条路：
+  <code>hermes_cli/plugins.py</code> 里有 <code>PluginManager.register_tool()</code>。
+</p>
+
+<pre><code><span class="filename">hermes_cli/plugins.py:317-360</span>
+<span class="k">def</span> <span class="f">register_tool</span>(
+    self,
+    name: str,
+    toolset: str,
+    schema: dict,
+    handler: Callable,
+    check_fn: Callable = <span class="k">None</span>,
+    requires_env: list = <span class="k">None</span>,
+    is_async: bool = <span class="k">False</span>,
+    description: str = <span class="s">""</span>,
+    emoji: str = <span class="s">""</span>,
+    override: bool = <span class="k">False</span>,
+) <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Register a tool in the global registry AND mark it as plugin-provided."""</span>
+    <span class="k">from</span> tools.registry <span class="k">import</span> registry
+
+    registry.<span class="f">register</span>(
+        name=name, toolset=toolset, schema=schema, handler=handler,
+        check_fn=check_fn, requires_env=requires_env,
+        is_async=is_async, description=description, emoji=emoji,
+        override=override,
+    )
+    self._manager._plugin_tool_names.<span class="f">add</span>(name)   <span class="c"># 多记一个"这是 plugin 来的"</span></code></pre>
+
+<p>用户的 plugin 长这样：</p>
+
+<pre><code><span class="filename">~/.hermes/plugins/fortune/__init__.py</span>
+<span class="k">import</span> json, random
+
+<span class="k">def</span> <span class="f">fortune_handler</span>(args, **kw):
+    quotes = [<span class="s">"Talk is cheap."</span>, <span class="s">"Make it work, make it right..."</span>]
+    <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"quote"</span>: random.<span class="f">choice</span>(quotes)})
+
+FORTUNE_SCHEMA = {
+    <span class="s">"name"</span>: <span class="s">"fortune_cookie"</span>,
+    <span class="s">"description"</span>: <span class="s">"Return a random programming fortune quote."</span>,
+    <span class="s">"parameters"</span>: {<span class="s">"type"</span>: <span class="s">"object"</span>, <span class="s">"properties"</span>: {}, <span class="s">"required"</span>: []},
+}
+
+<span class="c"># 注意：不是直接调 registry.register，而是通过 ctx</span>
+<span class="k">def</span> <span class="f">register</span>(ctx):
+    ctx.<span class="f">register_tool</span>(
+        name=<span class="s">"fortune_cookie"</span>,
+        toolset=<span class="s">"fortune"</span>,
+        schema=FORTUNE_SCHEMA,
+        handler=fortune_handler,
+        emoji=<span class="s">"🥠"</span>,
+    )</code></pre>
+
+<p>
+  插件的 <code>register(ctx)</code> 函数由 PluginManager 在加载 plugin 时调用。
+  ctx 提供 <code>register_tool</code> 等便捷方法。这样 Hermes 知道哪些工具来自 plugin，
+  方便诊断和卸载。
+</p>
+
+<h2 class="section"><span class="secnum">6.5</span>get_definitions：给 LLM 准备 schema</h2>
+
+<p>注册完工具，下一步是把 schema 提供给 LLM。在 <code>model_tools.py</code>：</p>
+
+<pre><code><span class="filename">model_tools.py:264-326 (摘要)</span>
+<span class="k">def</span> <span class="f">get_tool_definitions</span>(
+    enabled_toolsets: List[str] = <span class="k">None</span>,
+    disabled_toolsets: List[str] = <span class="k">None</span>,
+    quiet_mode: bool = <span class="k">False</span>,
+) <span class="k">-&gt;</span> List[Dict[str, Any]]:
+    <span class="s">"""Get tool definitions for LLM API calls with toolset-based filtering.
+
+    All tools must belong to a toolset to be accessible. Tools whose
+    check_fn() returns False are filtered out (e.g. terminal tool when
+    Docker isn't running).
+    """</span>
+    <span class="c"># 缓存机制：用 (toolsets, registry._generation, config_mtime) 做 key</span>
+    <span class="k">if</span> quiet_mode:
+        cache_key = <span class="f">_build_cache_key</span>(enabled_toolsets, disabled_toolsets)
+        cached = _tool_defs_cache.<span class="f">get</span>(cache_key)
+        <span class="k">if</span> cached <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            <span class="k">return</span> <span class="f">list</span>(cached)   <span class="c"># shallow copy 避免污染</span>
+
+    <span class="c"># 实际计算</span>
+    result = <span class="f">_compute_tool_definitions</span>(enabled_toolsets, disabled_toolsets, quiet_mode)
+    <span class="k">if</span> quiet_mode:
+        _tool_defs_cache[cache_key] = result
+    <span class="k">return</span> <span class="f">list</span>(result)</code></pre>
+
+<p><code>_compute_tool_definitions</code> 的逻辑：</p>
+
+<ol>
+  <li>从 <code>toolsets.py</code> 的 <code>TOOLSETS</code> 字典展开 enabled_toolsets 到具体 tool name 集合。</li>
+  <li>从 disabled_toolsets 中拿到要排除的名字。</li>
+  <li>调 <code>registry.get_definitions(tool_names)</code>。</li>
+  <li>Registry 内部对每个 tool 调 <code>check_fn()</code>——返回 False 的剔掉。</li>
+  <li>给每个 schema 应用 <code>dynamic_schema_overrides()</code>（如果有）。</li>
+  <li>包装成 OpenAI <code>{"type": "function", "function": {...}}</code> 格式。</li>
+</ol>
+
+<h3>check_fn 的 TTL 缓存</h3>
+
+<p>
+  <code>check_fn</code> 可能做实际的 I/O（"docker 在跑吗？"）。每次 get_definitions
+  都 fresh 调一次太贵。Registry 内部对 check_fn 结果有 30 秒 TTL 缓存：
+</p>
+
+<pre><code><span class="k">@functools.lru_cache</span>(maxsize=<span class="num">128</span>)
+<span class="k">def</span> <span class="f">_check_fn_with_ttl</span>(fn, ttl_bucket):
+    <span class="k">return</span> <span class="f">fn</span>()
+
+<span class="k">def</span> <span class="f">_check_fn_cached</span>(fn):
+    <span class="c"># 把 TTL 切成 30 秒"桶"，同一桶内同一 fn 调用结果一致</span>
+    bucket = <span class="f">int</span>(time.<span class="f">time</span>()) // <span class="num">30</span>
+    <span class="k">return</span> <span class="f">_check_fn_with_ttl</span>(fn, bucket)</code></pre>
+
+<p>
+  30 秒选这个数字是<em>权衡</em>：太短，频繁 I/O；太长，用户改了配置（启用 terminal）
+  要等 60 秒才生效。30 秒让用户感觉<em>"近实时"</em>。
+</p>
+
+<h3>Dynamic Schema Overrides</h3>
+
+<p>
+  有些工具的 schema 描述<em>依赖运行时配置</em>。例如 <code>delegate_task</code>
+  的描述里说"最多并发 N 个子 agent"，N 来自 config.yaml。Hermes 让工具注册
+  <code>dynamic_schema_overrides</code> 回调：
+</p>
+
+<pre><code><span class="k">def</span> <span class="f">_dynamic_delegate_schema</span>():
+    cfg = <span class="f">load_config</span>()
+    max_concurrent = cfg.<span class="f">get</span>(<span class="s">"delegation.max_concurrent_children"</span>, <span class="num">3</span>)
+    <span class="k">return</span> {
+        <span class="s">"description"</span>: <span class="f">f</span><span class="s">"Delegate a subtask... max {max_concurrent} concurrent."</span>
+    }
+
+registry.<span class="f">register</span>(
+    name=<span class="s">"delegate_task"</span>,
+    schema=STATIC_SCHEMA,
+    dynamic_schema_overrides=_dynamic_delegate_schema,
+    ...
+)</code></pre>
+
+<p>
+  每次 <code>get_tool_definitions</code> 被调用时，dynamic override 被求值。
+  cache key 包含 <code>config_mtime</code>，所以 config 改了 cache 自动失效。
+</p>
+
+<h2 class="section"><span class="secnum">6.6</span>handle_function_call：执行管道</h2>
+
+<p>LLM 返回 tool_calls 后，<code>model_tools.py</code> 的 <code>handle_function_call</code> 接管：</p>
+
+<pre><code><span class="filename">model_tools.py:741-894 (摘要)</span>
+<span class="k">def</span> <span class="f">handle_function_call</span>(
+    function_name: str,
+    function_args: Dict[str, Any],
+    task_id: Optional[str] = <span class="k">None</span>,
+    tool_call_id: Optional[str] = <span class="k">None</span>,
+    session_id: Optional[str] = <span class="k">None</span>,
+    enabled_tools: Optional[List[str]] = <span class="k">None</span>,
+    skip_pre_tool_call_hook: bool = <span class="k">False</span>,
+) <span class="k">-&gt;</span> str:
+    <span class="s">"""Main dispatcher — routes calls to the registry."""</span>
+
+    <span class="c"># 1. 参数类型转换（"42" → 42 等）</span>
+    function_args = <span class="f">coerce_tool_args</span>(function_name, function_args)
+
+    <span class="c"># 2. Agent-loop 内置工具（todo / memory）不走这里</span>
+    <span class="k">if</span> function_name <span class="k">in</span> _AGENT_LOOP_TOOLS:
+        <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"error"</span>: <span class="f">f</span><span class="s">"{function_name} must be handled by agent loop"</span>})
+
+    <span class="c"># 3. 调 pre_tool_call hook（plugin 可以阻止）</span>
+    <span class="k">if</span> <span class="k">not</span> skip_pre_tool_call_hook:
+        block_message = <span class="f">get_pre_tool_call_block_message</span>(
+            function_name, function_args,
+            task_id=task_id <span class="k">or</span> <span class="s">""</span>,
+            session_id=session_id <span class="k">or</span> <span class="s">""</span>,
+        )
+        <span class="k">if</span> block_message <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"error"</span>: block_message}, ensure_ascii=<span class="k">False</span>)
+
+    <span class="c"># 4. ACP/Zed edit approval（GUI 集成时）</span>
+    edit_block = <span class="f">maybe_require_edit_approval</span>(function_name, function_args)
+    <span class="k">if</span> edit_block <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+        <span class="k">return</span> edit_block
+
+    <span class="c"># 5. 实际 dispatch — 测时长</span>
+    _start = time.<span class="f">monotonic</span>()
+    result = registry.<span class="f">dispatch</span>(
+        function_name, function_args,
+        task_id=task_id,
+        ...
+    )
+    duration_ms = <span class="f">int</span>((time.<span class="f">monotonic</span>() - _start) * <span class="num">1000</span>)
+
+    <span class="c"># 6. post_tool_call hook（plugin 观察用）</span>
+    <span class="f">invoke_hook</span>(<span class="s">"post_tool_call"</span>,
+                tool_name=function_name, args=function_args,
+                result=result, duration_ms=duration_ms,
+                task_id=task_id <span class="k">or</span> <span class="s">""</span>)
+
+    <span class="c"># 7. transform_tool_result hook（plugin 可以改写结果）</span>
+    hook_results = <span class="f">invoke_hook</span>(<span class="s">"transform_tool_result"</span>, ...)
+    <span class="k">for</span> hr <span class="k">in</span> hook_results:
+        <span class="k">if</span> <span class="f">isinstance</span>(hr, str):
+            result = hr
+            <span class="k">break</span>
+
+    <span class="k">return</span> result</code></pre>
+
+<div class="code-caption"><span class="listing">Listing 6.2</span> 工具调用的 7 步管道</div>
+
+<p>这 7 步可以分成三组：</p>
+
+<table>
+  <thead>
+    <tr><th>组</th><th>步骤</th><th>作用</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>预处理</td><td>1, 2</td><td>参数规范化，特殊工具走 fast-path</td></tr>
+    <tr><td>权限 / 拦截</td><td>3, 4</td><td>Plugin 和 GUI 集成的"否决权"</td></tr>
+    <tr><td>执行 + 观察</td><td>5, 6, 7</td><td>实际调用 + 监控 + 改写</td></tr>
+  </tbody>
+</table>
+
+<h3>registry.dispatch</h3>
+
+<p><code>registry.dispatch</code> 是最里层的执行：</p>
+
+<pre><code><span class="filename">tools/registry.py:260-305</span>
+<span class="k">def</span> <span class="f">dispatch</span>(self, name: str, args: dict, **kwargs) <span class="k">-&gt;</span> str:
+    <span class="s">"""Execute a tool handler by name.
+
+    * Async handlers bridged via _run_async()
+    * All exceptions caught and returned as JSON error
+    """</span>
+    entry = self.<span class="f">get_entry</span>(name)
+    <span class="k">if</span> <span class="k">not</span> entry:
+        <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"error"</span>: <span class="f">f</span><span class="s">"Unknown tool: {name}"</span>})
+
+    <span class="k">try</span>:
+        <span class="k">if</span> entry.is_async:
+            <span class="k">from</span> model_tools <span class="k">import</span> _run_async
+            <span class="k">return</span> <span class="f">_run_async</span>(entry.<span class="f">handler</span>(args, **kwargs))
+        <span class="k">return</span> entry.<span class="f">handler</span>(args, **kwargs)
+    <span class="k">except</span> Exception <span class="k">as</span> e:
+        logger.<span class="f">exception</span>(<span class="s">"Tool %s dispatch error: %s"</span>, name, e)
+        raw = <span class="f">f</span><span class="s">"Tool execution failed: {type(e).__name__}: {e}"</span>
+        sanitized = <span class="f">_sanitize_tool_error</span>(raw)
+        <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"error"</span>: sanitized})</code></pre>
+
+<p>三个细节：</p>
+
+<ol>
+  <li><strong>异常一定 catch</strong>。Agent 主循环不应该被工具异常打死。</li>
+  <li><strong>错误清洗</strong>：<code>_sanitize_tool_error</code> 把 <code>&lt;tool_call&gt;</code>、<code>```</code>、CDATA
+      这种"框架字符串"从异常消息里剥掉——免得错误信息里有 <code>&lt;tool_call&gt;</code> 让模型把它解析成嵌套工具调用。</li>
+  <li><strong>async handler 自动桥接</strong>：用 <code>_run_async</code> 跑 coroutine。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">6.7</span>async 桥接的细节</h2>
+
+<p>
+  Hermes 同时支持纯 sync 的 CLI 和 asyncio-based 的 Gateway。
+  工具可以写成 async（处理 HTTP/网络等），但调用方可能在两种环境里。
+  <code>_run_async</code> 是这个桥：
+</p>
+
+<pre><code><span class="filename">model_tools.py:84-173 (摘要)</span>
+_persistent_loops: Dict[int, asyncio.AbstractEventLoop] = {}
+
+<span class="k">def</span> <span class="f">_run_async</span>(coro):
+    <span class="s">"""Run an async coroutine from a sync context."""</span>
+    <span class="k">try</span>:
+        running = asyncio.<span class="f">get_running_loop</span>()
+    <span class="k">except</span> RuntimeError:
+        running = <span class="k">None</span>
+
+    <span class="k">if</span> running <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+        <span class="c"># 当前线程已经在 event loop 里 — 起一个临时线程跑 asyncio.run</span>
+        <span class="k">return</span> <span class="f">_run_in_thread</span>(coro)
+    <span class="k">else</span>:
+        <span class="c"># 没 loop — 用持久 loop 跑（per-thread）</span>
+        tid = threading.<span class="f">get_ident</span>()
+        loop = _persistent_loops.<span class="f">get</span>(tid)
+        <span class="k">if</span> loop <span class="k">is</span> <span class="k">None</span> <span class="k">or</span> loop.<span class="f">is_closed</span>():
+            loop = asyncio.<span class="f">new_event_loop</span>()
+            _persistent_loops[tid] = loop
+        <span class="k">return</span> loop.<span class="f">run_until_complete</span>(coro)</code></pre>
+
+<p>三种场景：</p>
+
+<table>
+  <thead>
+    <tr><th>场景</th><th>处理</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>CLI 主线程，无 event loop</td>
+      <td>用 per-thread 持久 loop（避免 <code>asyncio.run</code> 不断创建/销毁 loop 导致缓存 client 失效）</td>
+    </tr>
+    <tr>
+      <td>Gateway，主线程已经有 asyncio loop</td>
+      <td>起临时线程跑 <code>asyncio.run</code>。不能在已有 loop 上嵌套</td>
+    </tr>
+    <tr>
+      <td>并发 worker 子线程</td>
+      <td>per-thread 持久 loop，每个 worker 自己的 loop</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <span class="label">为什么不能在 running loop 上直接 run_until_complete</span>
+  Python 不允许在已经在跑的 event loop 上再 run_until_complete——抛
+  <code>RuntimeError: This event loop is already running</code>。
+  所以 Hermes 必须检测当前是否在 loop 里，是的话开线程绕过去。
+</div>
+
+<h2 class="section"><span class="secnum">6.8</span>Schema description 的艺术</h2>
+
+<p>
+  LLM 选用哪个工具<em>完全</em>看 <code>description</code> 字段。写好它直接决定工具被
+  正确调用的频率。
+</p>
+
+<h3>反例</h3>
+
+<pre><code><span class="s">"description"</span>: <span class="s">"A tool for searching."</span>     <span class="c"># 模糊到没用</span>
+<span class="s">"description"</span>: <span class="s">"Use this powerful tool to access advanced search capabilities..."</span>
+     <span class="c"># 营销话术，全是噪声</span></code></pre>
+
+<h3>好的范例</h3>
+
+<p>看 <code>todo_tool.py</code> 的 description：</p>
+
+<pre><code><span class="s">"description"</span>: (
+    <span class="s">"Manage your task list for the current session. Use for complex "</span>
+    <span class="s">"tasks with 3+ steps or when the user provides multiple tasks. "</span>
+    <span class="s">"Call with no parameters to read the current list.\n\n"</span>
+    <span class="s">"Writing:\n"</span>
+    <span class="s">"- Provide 'todos' array to create/update items\n"</span>
+    <span class="s">"- merge=false (default): replace the entire list with a fresh plan\n"</span>
+    <span class="s">"- merge=true: update existing items by id, add any new ones\n\n"</span>
+    <span class="s">"Each item: {id, content, status: pending|in_progress|completed|cancelled}\n"</span>
+    <span class="s">"List order is priority. Only ONE item in_progress at a time.\n"</span>
+    <span class="s">"Mark items completed immediately when done."</span>
+)</code></pre>
+
+<p>这段 description 长 250 字，但每一字都<em>"告诉模型何时该用、怎么用、有什么约束"</em>。
+   注意几个写作技巧：</p>
+
+<ul>
+  <li><strong>开头一句话总结用途</strong>：模型只读前 30 字就能判断"现在该不该考虑这个工具"。</li>
+  <li><strong>触发条件具体</strong>：<em>"3+ steps or when the user provides multiple tasks"</em>——比"复杂任务"清楚 100 倍。</li>
+  <li><strong>参数语义说清楚</strong>：merge=true 和 false 的区别说在 description 而不是只在
+      parameters 里。LLM 主要读 description。</li>
+  <li><strong>约束写明</strong>：<em>"Only ONE item in_progress at a time"</em>——避免幻觉。</li>
+</ul>
+
+<div class="callout tip">
+  <span class="label">迭代方法</span>
+  写 schema description 是<em>实验的</em>。把工具部署上去看 LLM 的实际调用日志：
+  调用太频繁？描述太宽。该用没用？描述太窄。读 LLM 调它前后的 reasoning，
+  找出它对你 description 的"误解"，针对性修改。这是 Agent 工程里最像
+  prompt engineering 的部分。
+</div>
+
+<h3>禁忌：跨 toolset 引用</h3>
+
+<p>Hermes 的一条规则：<em>tool schema description 不能提到其他 toolset 的工具名</em>。</p>
+
+<p>反例：</p>
+
+<pre><code><span class="s">"description"</span>: <span class="s">"Search the web. For local files, prefer read_file instead."</span></code></pre>
+
+<p>问题：如果 <code>read_file</code> 在当前 session 不可用（toolset 没启），
+   LLM 会被指向一个看不见的工具，可能<em>幻觉调用</em>。Hermes 在
+   <code>get_tool_definitions</code> 里用 dynamic override 动态加上这种跨引用，
+   而不是写死在 static schema 里。</p>
+
+<h2 class="section"><span class="secnum">6.9</span>本章带走的</h2>
+
+<ul>
+  <li>每个工具是<strong>四件套</strong>：handler + check_fn + schema + register 调用。模块级副作用注册。</li>
+  <li><strong>Registry</strong> 是线程安全的全局单例，用 <code>_generation</code> 计数器做外部缓存失效。</li>
+  <li><strong>override=True</strong> 是显式开关：plugin 想替换内置工具必须主动声明。</li>
+  <li><strong>自动发现</strong>：<code>discover_builtin_tools()</code> 扫 <code>tools/*.py</code> 触发模块顶层注册。一个失败不挂全局。</li>
+  <li><strong>check_fn TTL 缓存 30 秒</strong>：平衡 I/O 成本和实时性。</li>
+  <li><strong>dynamic_schema_overrides</strong>：让 schema 反映运行时配置（如并发上限）。</li>
+  <li><strong>handle_function_call 7 步管道</strong>：预处理 → 拦截 → 执行 → 观察。</li>
+  <li><strong>async 桥接</strong>：CLI 用持久 loop，已在 loop 里就开线程。Per-thread 隔离。</li>
+  <li><strong>Schema description 是 prompt engineering</strong>。写清楚<em>何时用、怎么用、约束</em>。</li>
+  <li>避免跨 toolset 静态引用——用 dynamic override 动态加。</li>
+</ul>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 <code>register()</code> 默认拒绝覆盖同名工具？什么场景应该用 <code>override=True</code>？
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      在你最熟悉的项目里挑一个能让 LLM 用的功能，写出对应工具的 <strong>name</strong> + <strong>schema</strong>。
+      （不用写 handler，只写 LLM 能看到的部分。）
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      <code>check_fn</code> TTL 30 秒在大多数情况下是合理的。但有一种边缘场景会出错——你启用
+      <code>terminal</code> toolset 后 0–30 秒内 LLM 不会"看见"它。设计一个能立即生效的方法，
+      同时不引入永久轮询。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      打开 Hermes 的 <code>tools/web_tools.py</code>，找 <code>web_search</code> 的 schema。
+      用你的 LLM API 跑几次，故意写一个模糊的 query 看它怎么调用。然后试着改写 description，
+      让它在 query 不明确时更倾向于反问而不是直接 search。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      模仿 <code>clarify_tool.py</code> 的结构，写一个完整的 <code>image_caption</code> 工具：
+      接受图片 URL，调一个 vision model 返回描述。包括 4 件套 + 一个能跑的最简 main。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Hermes 的 async 桥接<em>在已经有 loop 时开临时线程跑 asyncio.run</em>。这有性能开销。
+      研究：能不能用 <code>asyncio.run_coroutine_threadsafe(coro, loop)</code> 在<em>同一个 loop</em>
+      上调度，然后 <code>future.result()</code> 等结果？这种方案有什么 trade-off？
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch05-prompt-cache.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 5 章 · System Prompt 与缓存</div>
+  </a>
+  <a class="next" href="ch07-toolsets.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 7 章 · Toolset、安全与 Hook</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>从 Hermes 学 Agent · 完整目录</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 返回总目录</a>
+
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存经济</a></li>
+    </ol>
+  </div>
+
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry 与发现</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset、安全与 Hook</a></li>
+    </ol>
+  </div>
+
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills 程序性记忆</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory 与 FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator 自我维护</a></li>
+    </ol>
+  </div>
+
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider 与 Plugin</a></li>
+    </ol>
+  </div>
+
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Agent Frontier</a></li>
+    </ol>
+  </div>
+
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与设计哲学</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="hero">
+  <h1>从 Hermes 学 Agent</h1>
+  <p class="tagline">一本用 Hermes Agent 源码教你怎么造 Agent 的代码级教材。</p>
+  <div class="author">14 章 · 约 8 万字 · 面向 LLM 应用开发者</div>
+</div>
+
+<p class="lead">
+  本书不是"Agent 入门 30 分钟"。它的目标是让你<strong>真正理解一个上线产品级的
+  Agent 在工程上是如何运转的</strong>——从最里层的 9 行 while 循环，到最外层的
+  跨平台部署、模型切换、自我改进、安全沙箱。
+</p>
+
+<p>
+  教材是开源项目 <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>，
+  Nous Research 开源的多模型、多平台 Agent 框架。所有章节都基于 Hermes 的真实代码——
+  每个抽象都对应到具体文件和行号，每个设计决策都讨论它在解决什么实际问题。
+  并配合 2023–2026 年间 Agent 研究的关键论文与工业实践（ReAct、Voyager、MemGPT、
+  Anthropic Context Engineering、MCP、Claude Code、SWE-Bench Verified 等）做横向对照。
+</p>
+
+<h3 style="margin-top: 48px;">怎么读这本书</h3>
+
+<ul>
+  <li><strong>顺序读</strong>：从 Part I 到 Part VII，按依赖顺序铺开。约 6–8 小时。</li>
+  <li><strong>跳读</strong>：每章顶部有"前置知识"提示。如果你已经懂基本概念，可以直接跳到 Part III 或 IV。</li>
+  <li><strong>对照源码读</strong>：每章列出涉及的 Hermes 文件路径。强烈建议<code>git clone</code> 源码，打开 IDE 对照。</li>
+  <li><strong>做习题</strong>：每章末尾有 2–4 道思考/实战题。Hard 标记的题目通常需要动手改 Hermes 或写一个 Plugin。</li>
+</ul>
+
+<h3>前置知识</h3>
+
+<ul>
+  <li>读过 OpenAI Function Calling 文档（理解 <code>tools</code> 参数和 <code>tool_calls</code> 返回值）。</li>
+  <li>中等水平 Python：能看懂 dataclass、ABC、装饰器、async/await。</li>
+  <li>对 LLM 推理 API 有基本认识：context window、token、streaming。</li>
+  <li>命令行基本操作。</li>
+</ul>
+
+<hr style="margin: 56px 0; border: none; border-top: 1px dashed var(--border);">
+
+<!-- ============================================================
+     FULL TABLE OF CONTENTS
+     ============================================================ -->
+
+<h2 class="section" style="margin-top: 0;"><span class="secnum">·</span>完整目录</h2>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART I</span>
+    <span class="part-name">基础 — 理解 Agent 到底是什么</span>
+    <span class="part-desc">心智模型 + 研究脉络</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">01</span>
+      <span class="title">
+        <a href="ch01-history.html">Agent 的前世今生</a>
+        <span class="desc">从 AutoGPT 到 Claude Code：四年时间里 Agent 这个词的含义变了什么</span>
+      </span>
+      <span class="pages">~25 min</span>
+    </li>
+    <li>
+      <span class="num">02</span>
+      <span class="title">
+        <a href="ch02-mental-model.html">心智模型</a>
+        <span class="desc">ReAct、CoT、Workflow vs Agent：把概念对齐到代码</span>
+      </span>
+      <span class="pages">~20 min</span>
+    </li>
+  </ul>
+</div>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART II</span>
+    <span class="part-name">核心循环 — Agent 的心脏</span>
+    <span class="part-desc">3800 行 conversation_loop 解剖</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">03</span>
+      <span class="title">
+        <a href="ch03-agent-loop.html">run_conversation 深度解剖</a>
+        <span class="desc">从 13 行精髓到生产级实现：budget、grace call、interrupt、retry</span>
+      </span>
+      <span class="pages">~35 min</span>
+    </li>
+    <li>
+      <span class="num">04</span>
+      <span class="title">
+        <a href="ch04-protocol.html">消息协议与 Tool Calling</a>
+        <span class="desc">OpenAI 标准如何成为事实标准；reasoning 字段、Provider 差异、错误恢复</span>
+      </span>
+      <span class="pages">~25 min</span>
+    </li>
+    <li>
+      <span class="num">05</span>
+      <span class="title">
+        <a href="ch05-prompt-cache.html">System Prompt 与缓存经济</a>
+        <span class="desc">三层结构 stable / context / volatile：每次破缓存就是 10 倍成本</span>
+      </span>
+      <span class="pages">~20 min</span>
+    </li>
+  </ul>
+</div>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART III</span>
+    <span class="part-name">工具系统 — 让 LLM 真正能"做事"</span>
+    <span class="part-desc">79 个工具如何不互相打架</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">06</span>
+      <span class="title">
+        <a href="ch06-tools.html">Tool Registry 与自动发现</a>
+        <span class="desc">从写一个工具到 LLM 调用它的全链路；schema、handler、check_fn 四件套</span>
+      </span>
+      <span class="pages">~30 min</span>
+    </li>
+    <li>
+      <span class="num">07</span>
+      <span class="title">
+        <a href="ch07-toolsets.html">Toolset、安全边界与 Hook</a>
+        <span class="desc">Capability-based security；为什么 Webhook 不能用 terminal；MCP 集成</span>
+      </span>
+      <span class="pages">~25 min</span>
+    </li>
+  </ul>
+</div>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART IV</span>
+    <span class="part-name">学习闭环 — 让 Agent 越用越聪明</span>
+    <span class="part-desc">Skills · Memory · Curator</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">08</span>
+      <span class="title">
+        <a href="ch08-skills.html">Skills：程序性记忆</a>
+        <span class="desc">从 Voyager 的 skill library 到 Hermes 的 SKILL.md；为何作为 user message 注入</span>
+      </span>
+      <span class="pages">~25 min</span>
+    </li>
+    <li>
+      <span class="num">09</span>
+      <span class="title">
+        <a href="ch09-memory.html">Memory 与 FTS5 跨会话搜索</a>
+        <span class="desc">MemGPT、Generative Agents 与 Hermes 的 memory_provider ABC</span>
+      </span>
+      <span class="pages">~25 min</span>
+    </li>
+    <li>
+      <span class="num">10</span>
+      <span class="title">
+        <a href="ch10-curator.html">Curator：技能库自我维护</a>
+        <span class="desc">active → stale → archived 状态机；inactivity-triggered 后台 review</span>
+      </span>
+      <span class="pages">~15 min</span>
+    </li>
+  </ul>
+</div>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART V</span>
+    <span class="part-name">多面架构 — 一个 Agent，多个出口</span>
+    <span class="part-desc">CLI · Telegram · Discord · 30 个模型</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">11</span>
+      <span class="title">
+        <a href="ch11-interfaces.html">CLI / Gateway / Profile 架构</a>
+        <span class="desc">profile 隔离的"导入前"技巧；中心化 Slash Command Registry；Platform Adapter 模式</span>
+      </span>
+      <span class="pages">~25 min</span>
+    </li>
+    <li>
+      <span class="num">12</span>
+      <span class="title">
+        <a href="ch12-providers-plugins.html">Provider 与 Plugin 生态</a>
+        <span class="desc">30 个 ProviderProfile 怎么处理 Provider quirks；Plugin Hook 体系</span>
+      </span>
+      <span class="pages">~25 min</span>
+    </li>
+  </ul>
+</div>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART VI</span>
+    <span class="part-name">前沿研究 — Agent 走到哪了</span>
+    <span class="part-desc">2024–2026 关键工作综述</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">13</span>
+      <span class="title">
+        <a href="ch13-frontier.html">2024–2026 Agent Frontier</a>
+        <span class="desc">Anthropic Context Engineering · MCP · Long-running Harnesses · SWE-Bench · Reasoning Models</span>
+      </span>
+      <span class="pages">~30 min</span>
+    </li>
+  </ul>
+</div>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART VII</span>
+    <span class="part-name">实践与哲学</span>
+    <span class="part-desc">动手 + 反思</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">14</span>
+      <span class="title">
+        <a href="ch14-practice.html">动手实践与设计哲学</a>
+        <span class="desc">从零写 Plugin / Skill；7 条带走的工程原则；推荐阅读路径</span>
+      </span>
+      <span class="pages">~30 min</span>
+    </li>
+  </ul>
+</div>
+
+<hr style="margin: 64px 0; border: none; border-top: 1px dashed var(--border);">
+
+<h3>致谢与说明</h3>
+
+<p>
+  本书并非 Hermes 官方文档。它是一份由代码倒推出来的学习材料，目的是让中文世界的
+  LLM 应用开发者多一份可以"啃源码"的进阶教材。Hermes 项目本身的官方文档在
+  <a href="https://hermes-agent.nousresearch.com/docs/">hermes-agent.nousresearch.com</a>。
+</p>
+
+<p>
+  所有引用的研究论文和工业博客均通过原始链接给出。如发现错误或希望补充，
+  欢迎反馈。Hermes 是 MIT 协议开源项目，<a href="https://github.com/NousResearch/hermes-agent">GitHub 仓库在这里</a>。
+</p>
+
+<div class="callout tip">
+  <span class="label">从哪开始读</span>
+  <p>如果你完全没接触过 Agent：从 <a href="ch01-history.html">第 1 章</a> 顺读。</p>
+  <p>如果你写过 LangChain / OpenAI Assistants：从 <a href="ch03-agent-loop.html">第 3 章</a> 开始，前两章可以快速扫读。</p>
+  <p>如果你只想了解前沿：直接看 <a href="ch13-frontier.html">第 13 章</a>。</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>
