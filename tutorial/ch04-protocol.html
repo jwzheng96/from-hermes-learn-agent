@@ -670,7 +670,124 @@ tool_call: read_file(main.py)
   <code>computer_use</code> 工具用同一 schema，可在 Claude / GPT-5 vision 两边切换。
 </p>
 
-<h2 class="section"><span class="secnum">4.10</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">4.10</span>代码深挖:跨 provider reasoning + 参数类型 coercion</h2>
+
+<h3>4.10.1 copy_reasoning_content_for_api:5 层 fallback</h3>
+
+<p>第 4.5 节我们说不同 provider 的 reasoning 字段不一样。看 Hermes 在<em>回放历史</em>时
+怎么处理"poisoned history"——历史里某 turn 是 MiniMax 写的,下一 turn 用 DeepSeek。
+DeepSeek 不能接受 MiniMax 的 reasoning 文本(可能 schema 不兼容),但又要求"必须有 reasoning_content":</p>
+
+<pre><code><span class="filename">agent/agent_runtime_helpers.py:1834-1903 (摘要)</span>
+<span class="k">def</span> <span class="f">copy_reasoning_content_for_api</span>(agent, source_msg, api_msg):
+    <span class="s">"""Copy provider-facing reasoning fields onto an API replay message."""</span>
+    <span class="k">if</span> source_msg.<span class="f">get</span>(<span class="s">"role"</span>) != <span class="s">"assistant"</span>:
+        <span class="k">return</span>
+
+    <span class="c"># 层 1:已有 reasoning_content,原样保留</span>
+    <span class="c"># 边界:DeepSeek V4 Pro 拒绝空字符串,把 "" → " "(空格)</span>
+    existing = source_msg.<span class="f">get</span>(<span class="s">"reasoning_content"</span>)
+    <span class="k">if</span> <span class="f">isinstance</span>(existing, str):
+        <span class="k">if</span> existing == <span class="s">""</span> <span class="k">and</span> agent.<span class="f">_needs_thinking_reasoning_pad</span>():
+            api_msg[<span class="s">"reasoning_content"</span>] = <span class="s">" "</span>
+        <span class="k">else</span>:
+            api_msg[<span class="s">"reasoning_content"</span>] = existing
+        <span class="k">return</span>
+
+    needs_thinking_pad = agent.<span class="f">_needs_thinking_reasoning_pad</span>()
+
+    <span class="c"># 层 2:跨 provider poisoned history (#15748):</span>
+    <span class="c"># DeepSeek/Kimi + 有 tool_calls + 有 'reasoning' 字段但无 reasoning_content</span>
+    <span class="c"># → 这个 reasoning 来自别的 provider(MiniMax 等)</span>
+    <span class="c"># 注入一个空格满足 schema,但不<em>泄漏</em>其他 provider 的 chain of thought</span>
+    normalized_reasoning = source_msg.<span class="f">get</span>(<span class="s">"reasoning"</span>)
+    <span class="k">if</span> (needs_thinking_pad
+        <span class="k">and</span> source_msg.<span class="f">get</span>(<span class="s">"tool_calls"</span>)
+        <span class="k">and</span> <span class="f">isinstance</span>(normalized_reasoning, str)
+        <span class="k">and</span> normalized_reasoning):
+        api_msg[<span class="s">"reasoning_content"</span>] = <span class="s">" "</span>
+        <span class="k">return</span>
+
+    <span class="c"># 层 3:正常 session, 'reasoning' → 'reasoning_content'</span>
+    <span class="k">if</span> <span class="f">isinstance</span>(normalized_reasoning, str) <span class="k">and</span> normalized_reasoning:
+        api_msg[<span class="s">"reasoning_content"</span>] = normalized_reasoning
+        <span class="k">return</span>
+
+    <span class="c"># 层 4:DeepSeek/Kimi thinking 模式 — 没显式 reasoning 也要兜底</span>
+    <span class="k">if</span> needs_thinking_pad:
+        api_msg[<span class="s">"reasoning_content"</span>] = <span class="s">" "</span>
+        <span class="k">return</span>
+
+    <span class="c"># 层 5:reasoning_content 是 non-string(比如 None) — 不发给 API</span>
+    api_msg.<span class="f">pop</span>(<span class="s">"reasoning_content"</span>, <span class="k">None</span>)
+</code></pre>
+
+<div class="callout warn">
+  <span class="label">为什么是空格,不是空字符串</span>
+  DeepSeek V4 Pro 实测拒绝 <code>reasoning_content: ""</code>(HTTP 400),
+  但接受 <code>reasoning_content: " "</code>(单空格)。
+  issue #17341 记录了这个 quirk。
+  <em>"安静的细节"</em>就是这种——你跑全集成测试碰不到,只有真正切到 DeepSeek 才炸。
+  这类知识没有 docs,只有 GitHub issue 历史。
+</div>
+
+<h3>4.10.2 coerce_tool_args:string → typed</h3>
+
+<p>开源模型(DeepSeek、Qwen、GLM)经常把 <code>{"max_results": 5}</code> 写成
+<code>{"max_results": "5"}</code>。直接传给 handler 类型不对会出错。Hermes 用 schema-aware coercion:</p>
+
+<pre><code><span class="filename">model_tools.py:545-626 (摘要)</span>
+<span class="k">def</span> <span class="f">coerce_tool_args</span>(tool_name, args):
+    <span class="s">"""Coerce tool call arguments to match their JSON Schema types.
+
+    LLM 频繁返回数字字符串("42" 而不是 42)和布尔字符串("true").
+    对照 schema 把字符串安全转换。失败保留原值。"""</span>
+    <span class="k">if</span> <span class="k">not</span> args <span class="k">or</span> <span class="k">not</span> <span class="f">isinstance</span>(args, dict):
+        <span class="k">return</span> args
+
+    schema = registry.<span class="f">get_schema</span>(tool_name)
+    properties = (schema.<span class="f">get</span>(<span class="s">"parameters"</span>) <span class="k">or</span> {}).<span class="f">get</span>(<span class="s">"properties"</span>)
+    <span class="k">if</span> <span class="k">not</span> properties:
+        <span class="k">return</span> args
+
+    <span class="k">for</span> key, value <span class="k">in</span> <span class="f">list</span>(args.<span class="f">items</span>()):
+        prop_schema = properties.<span class="f">get</span>(key)
+        <span class="k">if</span> <span class="k">not</span> prop_schema:
+            <span class="k">continue</span>
+        expected = prop_schema.<span class="f">get</span>(<span class="s">"type"</span>)
+
+        <span class="c"># 期望 array 但拿到 scalar — 自动包成单元素 list</span>
+        <span class="c"># DeepSeek 经常 {"urls": "https://a.com"} 而 schema 要 ["https://a.com"]</span>
+        <span class="k">if</span> expected == <span class="s">"array"</span> <span class="k">and</span> value <span class="k">is</span> <span class="k">not</span> <span class="k">None</span> <span class="k">and</span> <span class="k">not</span> <span class="f">isinstance</span>(value, (<span class="f">list</span>, <span class="f">tuple</span>)):
+            <span class="k">if</span> <span class="f">isinstance</span>(value, str):
+                coerced = <span class="f">_coerce_value</span>(value, expected, schema=prop_schema)
+                <span class="k">if</span> coerced <span class="k">is</span> <span class="k">not</span> value:
+                    args[key] = coerced
+                    <span class="k">continue</span>
+                <span class="c"># 看起来是 JSON 数组字符串但解析失败 — 警告</span>
+                <span class="k">if</span> value.<span class="f">strip</span>().<span class="f">startswith</span>(<span class="s">"["</span>):
+                    logger.<span class="f">warning</span>(<span class="s">"%s.%s looks like JSON array string ..."</span>, tool_name, key)
+                args[key] = [value]   <span class="c"># fallback:包成单元素 list</span>
+                <span class="k">continue</span>
+            args[key] = [value]
+            logger.<span class="f">info</span>(<span class="s">"wrapped bare %s in list"</span>, <span class="f">type</span>(value).<span class="f">__name__</span>)
+            <span class="k">continue</span>
+
+        <span class="c"># 标量 string → expected type 转换</span>
+        <span class="k">if</span> <span class="k">not</span> <span class="f">isinstance</span>(value, str):
+            <span class="k">continue</span>
+        coerced = <span class="f">_coerce_value</span>(value, expected, schema=prop_schema)
+        <span class="k">if</span> coerced <span class="k">is</span> <span class="k">not</span> value:
+            args[key] = coerced
+
+    <span class="k">return</span> args
+</code></pre>
+
+<p><em>"silent repair"</em>的智慧:不让用户看到错误,直接修。
+但每次修都<code>logger.info</code> 记录——便于 dev 调试时看"哦 Qwen 总把 URL 当 string 传"。
+日志是<em>"修了但你该知道"</em>的妥协方案。</p>
+
+<h2 class="section"><span class="secnum">4.11</span>本章带走的</h2>
 
 <ul>
   <li><strong>OpenAI Chat Completions 协议是事实标准</strong>。Hermes 不写专属 client，

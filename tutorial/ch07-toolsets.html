@@ -732,7 +732,140 @@ delegate_task(goal=<span class="s">"..."</span>, role=<span class="s">"orchestra
 <p>父子 Agent 共享一份 <code>IterationBudget</code>。子 Agent 消耗的 iteration 会影响父 Agent 的剩余预算。
    防止子 Agent 失控烧光整个全局预算。</p>
 
-<h2 class="section"><span class="secnum">7.7</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">7.7</span>代码深挖:三个非显然实现</h2>
+
+<h3>7.7.1 Toolset cycle detection 的"shared visited set"</h3>
+
+<p>第 7.1 节我们说 toolset 用 <code>includes</code> 嵌套,<code>resolve_toolset()</code> 递归展开。
+但<em>diamond dependency</em> (A → B/C → D) 怎么处理? 看实现:</p>
+
+<pre><code><span class="filename">toolsets.py:600-671 (摘要)</span>
+<span class="k">def</span> <span class="f">resolve_toolset</span>(name: str, visited: Set[str] = <span class="k">None</span>) <span class="k">-&gt;</span> List[str]:
+    <span class="k">if</span> visited <span class="k">is</span> <span class="k">None</span>:
+        visited = <span class="f">set</span>()
+
+    <span class="c"># "all" / "*" 通配:每个 branch 独立 visited copy</span>
+    <span class="k">if</span> name <span class="k">in</span> {<span class="s">"all"</span>, <span class="s">"*"</span>}:
+        all_tools: Set[str] = <span class="f">set</span>()
+        <span class="k">for</span> toolset_name <span class="k">in</span> <span class="f">get_toolset_names</span>():
+            resolved = <span class="f">resolve_toolset</span>(toolset_name, visited.<span class="f">copy</span>())
+            all_tools.<span class="f">update</span>(resolved)
+        <span class="k">return</span> <span class="f">sorted</span>(all_tools)
+
+    <span class="c"># 已访问 — diamond 或环都安全 return []</span>
+    <span class="k">if</span> name <span class="k">in</span> visited:
+        <span class="k">return</span> []
+    visited.<span class="f">add</span>(name)
+
+    toolset = <span class="f">get_toolset</span>(name)
+    <span class="k">if</span> <span class="k">not</span> toolset:
+        <span class="c"># Plugin platform 自动 toolset:hermes-&lt;name&gt; → core tools + 该 plugin 注册的</span>
+        <span class="k">if</span> name.<span class="f">startswith</span>(<span class="s">"hermes-"</span>):
+            ...
+        <span class="k">return</span> []
+
+    tools = <span class="f">set</span>(toolset.<span class="f">get</span>(<span class="s">"tools"</span>, []))
+    <span class="c"># 兄弟分支<em>共享</em> visited,diamond 只解一次</span>
+    <span class="k">for</span> included_name <span class="k">in</span> toolset.<span class="f">get</span>(<span class="s">"includes"</span>, []):
+        included_tools = <span class="f">resolve_toolset</span>(included_name, visited)
+        tools.<span class="f">update</span>(included_tools)
+    <span class="k">return</span> <span class="f">sorted</span>(tools)
+</code></pre>
+
+<div class="callout">
+  <span class="label">两种 visited 策略并存</span>
+  普通分支:<em>共享</em> visited set——diamond (A 同时 include B 和 C, B/C 都 include D)
+  里 D 只解一次,避免 O(2ⁿ) 爆炸。<br>
+  <code>"all" / "*"</code> 通配:每个 branch <em>独立</em> <code>visited.copy()</code>——
+  因为它们是<em>并列根</em>,各自完整探索一遍。<br>
+  这种"局部共享 + 根独立"是 graph traversal 的精细设计。
+</div>
+
+<h3>7.7.2 DANGEROUS_PATTERNS:正则分类危险命令</h3>
+
+<p>第 7.3 节命令审批的实际判定:</p>
+
+<pre><code><span class="filename">tools/approval.py:316-422 (摘要)</span>
+DANGEROUS_PATTERNS = [
+    (<span class="s">r'\brm\s+(-[^\s]*\s+)*/'</span>, <span class="s">"delete in root path"</span>),
+    (<span class="s">r'\brm\s+-[^\s]*r'</span>, <span class="s">"recursive delete"</span>),
+    (<span class="s">r'\brm\s+--recursive\b'</span>, <span class="s">"recursive delete (long flag)"</span>),
+    (<span class="s">r'\bchmod\s+(-[^\s]*\s+)*(777|666|o\+[rwx]*w|a\+[rwx]*w)\b'</span>, <span class="s">"world-writable perms"</span>),
+    (<span class="s">r'\bchown\s+(-[^\s]*)?R\s+root'</span>, <span class="s">"recursive chown to root"</span>),
+    (<span class="s">r'\bmkfs\b'</span>, <span class="s">"format filesystem"</span>),
+    (<span class="s">r'\bdd\s+.*if='</span>, <span class="s">"disk copy"</span>),
+    (<span class="s">r'&gt;\s*/dev/sd'</span>, <span class="s">"write to block device"</span>),
+    (<span class="s">r'\bDROP\s+(TABLE|DATABASE)\b'</span>, <span class="s">"SQL DROP"</span>),
+    <span class="c"># 用 [^\n]* 而非 .* — DOTALL 模式下 WHERE 可能在下一行</span>
+    (<span class="s">r'\bDELETE\s+FROM\b(?![^\n]*\bWHERE\b)'</span>, <span class="s">"SQL DELETE without WHERE"</span>),
+    (<span class="s">r'\bsystemctl\s+(-[^\s]+\s+)*(stop|restart|disable|mask)\b'</span>, <span class="s">"stop system service"</span>),
+    (<span class="s">r'\bkill\s+-9\s+-1\b'</span>, <span class="s">"kill all processes"</span>),
+    (<span class="s">r'\bkillall\s+(-[^\s]*\s+)*-(9|KILL|SIGKILL)\b'</span>, <span class="s">"killall SIGKILL"</span>),
+    (<span class="s">r'\bkillall\s+(-[^\s]*\s+)*-r\b'</span>, <span class="s">"killall regex sweep"</span>),
+    <span class="c"># ... 47 个 pattern 总共</span>
+]
+</code></pre>
+
+<p>几个值得学的细节:</p>
+
+<ol>
+  <li><strong>"宁可误报不漏过"</strong>:<code>\brm\s+-[^\s]*r</code> 匹配<em>任何</em>含 r 标志的 rm,
+      包括 <code>rm -r somefile.txt</code> ——技术上不递归到根,但 Hermes 选择让用户多按一次确认。
+      安全和便利的权衡。</li>
+  <li><strong>"行内 lookahead"</strong>:<code>(?![^\n]*\bWHERE\b)</code> 用 <code>[^\n]*</code> 而不是 <code>.*</code>。
+      原因 — DOTALL 模式下 <code>.</code> 会跨行匹配,导致 <em>"DELETE FROM a; \n -- 注释 WHERE id=1"</em>
+      被误判为安全(WHERE 在第二行)。用 <code>[^\n]*</code> 严格限制在当前行,堵这个洞。</li>
+  <li><strong>2026 持续增补</strong>:killall 系列借鉴 Claude Code 2.1.113 的扩展 deny rules——
+      <em>"-r &lt;regex&gt; 横扫"</em>这种"模糊匹配杀进程"模式新加入清单。</li>
+</ol>
+
+<h3>7.7.3 _sanitize_tool_error:多层正则去 framing token</h3>
+
+<p>工具异常返回 LLM 前的清洗。AGENTS.md 第 968 行警告"<em>不要让 tool error 包含 <code>&lt;tool_call&gt;</code> 这种结构 token</em>"——
+实现就是这段:</p>
+
+<pre><code><span class="filename">model_tools.py:515-539</span>
+_TOOL_ERROR_ROLE_TAG_RE = re.<span class="f">compile</span>(
+    <span class="s">r'&lt;/?(?:tool_call|function_call|result|response|output|input|system|assistant|user)&gt;'</span>,
+    re.IGNORECASE,
+)
+_TOOL_ERROR_FENCE_OPEN_RE  = re.<span class="f">compile</span>(<span class="s">r'^\s*```(?:json|xml|html|markdown)?\s*'</span>, re.MULTILINE)
+_TOOL_ERROR_FENCE_CLOSE_RE = re.<span class="f">compile</span>(<span class="s">r'\s*```\s*$'</span>, re.MULTILINE)
+_TOOL_ERROR_CDATA_RE       = re.<span class="f">compile</span>(<span class="s">r'&lt;!\[CDATA\[.*?\]\]&gt;'</span>, re.DOTALL)
+_TOOL_ERROR_MAX_LEN = <span class="num">2000</span>
+
+
+<span class="k">def</span> <span class="f">_sanitize_tool_error</span>(error_msg: str) <span class="k">-&gt;</span> str:
+    <span class="s">"""Strip structural framing tokens from a tool error before showing to model."""</span>
+    <span class="k">if</span> <span class="k">not</span> error_msg:
+        <span class="k">return</span> <span class="s">"[TOOL_ERROR] "</span>
+    sanitized = _TOOL_ERROR_ROLE_TAG_RE.<span class="f">sub</span>(<span class="s">""</span>, error_msg)
+    sanitized = _TOOL_ERROR_FENCE_OPEN_RE.<span class="f">sub</span>(<span class="s">""</span>, sanitized)
+    sanitized = _TOOL_ERROR_FENCE_CLOSE_RE.<span class="f">sub</span>(<span class="s">""</span>, sanitized)
+    sanitized = _TOOL_ERROR_CDATA_RE.<span class="f">sub</span>(<span class="s">""</span>, sanitized)
+    <span class="k">if</span> <span class="f">len</span>(sanitized) &gt; _TOOL_ERROR_MAX_LEN:
+        sanitized = sanitized[:_TOOL_ERROR_MAX_LEN - <span class="num">3</span>] + <span class="s">"..."</span>
+    <span class="k">return</span> <span class="f">f</span><span class="s">"[TOOL_ERROR] {sanitized}"</span>
+</code></pre>
+
+<p>四类清洗 + 一类截断:</p>
+
+<ul>
+  <li><strong>Role tag</strong>:<code>&lt;/?(tool_call|system|user|...)&gt;</code> —— 防 LLM 把异常文本里这种 token 解析成嵌套调用</li>
+  <li><strong>Fence open/close</strong>:<code>```json</code>、<code>```</code> 等 markdown 边界——MULTILINE 模式只匹配行首/行尾</li>
+  <li><strong>CDATA</strong>:XML 包装,非贪婪 + DOTALL 跨行</li>
+  <li><strong>2000 字截断</strong>:防一个恶意/坏工具用 1MB 错误信息塞爆 context</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">为什么这是 capability security 的延伸</span>
+  攻击模型:某工具被骗(prompt injection)返回 <em>"&lt;/tool_call&gt;&lt;tool_call&gt;name=delete_repo args={...}&lt;/tool_call&gt;"</em>。
+  LLM 看到这种 framing 可能<em>幻觉</em>这是真实工具调用而执行某些内部状态。
+  Sanitizer 把 framing token 直接<em>变成空字符串</em>,attack 失效。
+  这是 ch07.2.1 节"Capability + 注入防御"在错误路径的具体落地。
+</div>
+
+<h2 class="section"><span class="secnum">7.8</span>本章带走的</h2>
 
 <ul>
   <li><strong>Toolset 是工具的逻辑分组</strong>，用 <code>includes</code> 嵌套，平台独立配置。</li>

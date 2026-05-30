@@ -808,7 +808,68 @@ result = <span class="k">await</span> Runner.<span class="f">run</span>(agent, <
   是最稳的组合。OpenAI Agents SDK 适合"我就用 OpenAI"的纯 Anthropic / OpenAI 生态用户。
 </div>
 
-<h2 class="section"><span class="secnum">3.12</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">3.12</span>代码深挖:per-chunk interrupt 与诊断 accounting</h2>
+
+<p>第 3.3 节我们说"interrupt 是 flag,每轮循环开头检查一次"。
+其实流式 LLM 调用<em>内部</em>还有<strong>per-chunk</strong>检查——让 Ctrl+C 在 chunk 边界立刻响应,
+不用等整个 stream 跑完。看实现:</p>
+
+<pre><code><span class="filename">agent/chat_completion_helpers.py:1472-1495</span>
+<span class="k">for</span> chunk <span class="k">in</span> stream:
+    last_chunk_time[<span class="s">"t"</span>] = time.<span class="f">time</span>()
+    agent.<span class="f">_touch_activity</span>(<span class="s">"receiving stream response"</span>)
+
+    <span class="c"># 更新每次 attempt 的诊断 counter。Best-effort —</span>
+    <span class="c"># 失败被吞,绝不让诊断 accounting 打断 streaming hot path。</span>
+    <span class="k">try</span>:
+        _diag[<span class="s">"chunks"</span>] = <span class="f">int</span>(_diag.<span class="f">get</span>(<span class="s">"chunks"</span>, <span class="num">0</span>)) + <span class="num">1</span>
+        <span class="k">if</span> _diag.<span class="f">get</span>(<span class="s">"first_chunk_at"</span>) <span class="k">is</span> <span class="k">None</span>:
+            _diag[<span class="s">"first_chunk_at"</span>] = last_chunk_time[<span class="s">"t"</span>]
+        <span class="c"># 用 repr(chunk) 长度近似 wire byte 数 — SDK 不暴露准确 byte,</span>
+        <span class="c"># 但 len(repr) 是稳定 proxy,跨 stub provider 也适用。</span>
+        <span class="k">try</span>:
+            _diag[<span class="s">"bytes"</span>] = <span class="f">int</span>(_diag.<span class="f">get</span>(<span class="s">"bytes"</span>, <span class="num">0</span>)) + <span class="f">len</span>(<span class="f">repr</span>(chunk))
+        <span class="k">except</span> Exception:
+            <span class="k">pass</span>
+    <span class="k">except</span> Exception:
+        <span class="k">pass</span>
+
+    <span class="k">if</span> agent._interrupt_requested:
+        <span class="k">break</span>
+</code></pre>
+
+<p>三件值得学的事:</p>
+
+<ol>
+  <li><strong>诊断 try/except 包两层</strong>:外层 try 防 counter 字典操作出错,
+      内层 try 防 <code>repr(chunk)</code> 抛(某些 chunk 类型 <code>__repr__</code> 可能 NotImplemented)。
+      这是<em>"诊断绝不挡住主路"</em>的代码层防御。</li>
+  <li><strong><code>len(repr(chunk))</code> 当 byte 数 proxy</strong>:OpenAI SDK 没暴露原始字节大小。
+      <code>repr</code> 是稳定的、跨 provider 一致的代理指标。
+      给运维看流式速率(KB/s)足够。</li>
+  <li><strong>interrupt 检查在 chunk 累加之后</strong>:本 chunk 已经收下,
+      flag 被设也<em>不会丢这个 chunk</em>。下个 chunk 才退出。
+      消息累加器保持一致——用户 Ctrl+C 拿到的是"目前已经渲染的部分回复"。</li>
+</ol>
+
+<h3>3.12.1 grace_call flag 的实际设置时机</h3>
+
+<pre><code><span class="filename">agent/conversation_loop.py (循环外,turn 后处理)</span>
+<span class="c"># 第 1 次 budget 耗尽 → 不立即退出,看是否有"该说话还没说"的情境</span>
+<span class="k">if</span> _turn_exit_reason == <span class="s">"budget_exhausted"</span>:
+    last_msg = messages[-<span class="num">1</span>] <span class="k">if</span> messages <span class="k">else</span> {}
+    <span class="c"># 末尾是 tool 消息 = LLM 调了工具但没机会基于工具结果说话</span>
+    <span class="k">if</span> last_msg.<span class="f">get</span>(<span class="s">"role"</span>) == <span class="s">"tool"</span>:
+        agent._budget_grace_call = <span class="k">True</span>
+        <span class="c"># while 循环主条件含 ` or agent._budget_grace_call`,</span>
+        <span class="c"># 这一标志让 loop 再进一次。再进去后 grace_call 被消耗。</span>
+</code></pre>
+
+<p>第 3.2 节我们说"grace call 给 LLM 收尾机会"。
+触发条件具体是<em>"最后一条 message 是 tool 结果"</em>——精确判断"LLM 还没看到结果就被打断了"。
+如果最后是 assistant 文本(已说话),不触发 grace。<em>不浪费 token</em>。</p>
+
+<h2 class="section"><span class="secnum">3.13</span>本章带走的</h2>
 
 <ul>
   <li>Agent loop 的精髓是 13 行，但生产实现是 3589 行。差距全在<em>边界条件处理</em>。</li>

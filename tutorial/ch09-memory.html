@@ -795,7 +795,154 @@ flowchart TB
 <p>这是 MemGPT 的 <em>archival memory</em> 思想的实现——
    hot context 短而精，archival 完整但只能按需查。</p>
 
-<h2 class="section"><span class="secnum">9.12</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">9.12</span>代码深挖:Honcho 双层 cache + FTS5 触发器</h2>
+
+<h3>9.12.1 Honcho prefetch 的两层 cache 架构</h3>
+
+<p>第 9.7 节我们简述了 Honcho。看它的 <code>prefetch()</code> 实际实现——
+   两层 cache + 后台 thread + monotonic 活性判断:</p>
+
+<pre><code><span class="filename">plugins/memory/honcho/__init__.py:547-686 (摘要)</span>
+<span class="k">def</span> <span class="f">prefetch</span>(self, query: str, *, session_id: str = <span class="s">""</span>) <span class="k">-&gt;</span> str:
+    <span class="s">"""Return base context (representation + card) + dialectic supplement."""</span>
+    <span class="k">if</span> self._recall_mode == <span class="s">"tools"</span>:    <span class="c"># B1: 纯工具模式不注入</span>
+        <span class="k">return</span> <span class="s">""</span>
+    <span class="k">if</span> self._injection_frequency == <span class="s">"first-turn"</span> <span class="k">and</span> self._turn_count &gt; <span class="num">1</span>:
+        <span class="k">return</span> <span class="s">""</span>   <span class="c"># B5: 首轮模式过了首轮就停</span>
+    <span class="k">if</span> self.<span class="f">_is_trivial_prompt</span>(query):     <span class="c"># "ok"/"yes"/slash 跳过</span>
+        <span class="k">return</span> <span class="s">""</span>
+
+    parts = []
+
+    <span class="c"># ── Layer 1: Base context(representation + card) ──</span>
+    <span class="k">with</span> self._base_context_lock:
+        <span class="k">if</span> self._base_context_cache <span class="k">is</span> <span class="k">None</span>:
+            <span class="c"># 首次调用:同步拉,不能 turn 1 没数据</span>
+            ctx = self._manager.<span class="f">get_prefetch_context</span>(self._session_key)
+            self._base_context_cache = self.<span class="f">_format_first_turn_context</span>(ctx) <span class="k">if</span> ctx <span class="k">else</span> <span class="s">""</span>
+        base_context = self._base_context_cache
+
+    <span class="c"># 后台线程是否带来新结果</span>
+    fresh_ctx = self._manager.<span class="f">pop_context_result</span>(self._session_key)
+    <span class="k">if</span> fresh_ctx:
+        formatted = self.<span class="f">_format_first_turn_context</span>(fresh_ctx)
+        <span class="k">if</span> formatted:
+            <span class="k">with</span> self._base_context_lock:
+                self._base_context_cache = formatted
+            base_context = formatted
+
+    <span class="k">if</span> base_context: parts.<span class="f">append</span>(base_context)
+
+    <span class="c"># ── Layer 2: Dialectic supplement(LLM 合成的推理) ──</span>
+    <span class="k">if</span> self._last_dialectic_turn == -<span class="num">999</span> <span class="k">and</span> query:
+        _first_turn_timeout = self._config.timeout <span class="k">or</span> <span class="num">8.0</span>
+        _fired_at = self._turn_count
+
+        <span class="k">def</span> <span class="f">_run_first_turn</span>():
+            r = self.<span class="f">_run_dialectic_depth</span>(query)
+            <span class="k">if</span> r <span class="k">and</span> r.<span class="f">strip</span>():
+                <span class="k">with</span> self._prefetch_lock:
+                    self._prefetch_result = r
+                self._last_dialectic_turn = _fired_at
+                self._dialectic_empty_streak = <span class="num">0</span>
+            <span class="k">else</span>:
+                self._dialectic_empty_streak += <span class="num">1</span>
+
+        self._prefetch_thread_started_at = time.<span class="f">monotonic</span>()
+        self._prefetch_thread = threading.<span class="f">Thread</span>(target=_run_first_turn, daemon=<span class="k">True</span>)
+        self._prefetch_thread.<span class="f">start</span>()
+        self._prefetch_thread.<span class="f">join</span>(timeout=_first_turn_timeout)
+</code></pre>
+
+<p>关键设计:</p>
+
+<ol>
+  <li><strong>同步 vs 后台</strong>:首次调用<em>同步</em>拉 base context (~不能让 turn 1 拿空)。
+      之后所有调用<em>消费后台线程</em>结果——已经在前一 turn 异步拉好。</li>
+  <li><strong>8 秒 bounded join</strong>:首轮 dialectic 等最多 8 秒。
+      超时<em>不杀线程</em>(让它继续在后台跑),只是<em>本 turn</em> 不等了。
+      下一 turn 进来线程已 set 结果,免费用。</li>
+  <li><strong>Empty streak 指数退避</strong>:连续 N 次后端返回空,会拉长 cadence
+      最终封顶,避免对一个"没数据"的 user 一直 hammering 后端。</li>
+</ol>
+
+<h3>9.12.2 FTS5 trigger 与全文索引内容</h3>
+
+<p>第 9.5 节讲过 FTS5。看实际的 schema 和触发器——索引的不只是 content,
+还<em>拼接</em>了 tool_name 和 tool_calls:</p>
+
+<pre><code><span class="filename">hermes_state.py:255-308 (FTS5 触发器)</span>
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content);
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, content) VALUES (
+        new.id,
+        COALESCE(new.content, <span class="s">''</span>) || <span class="s">' '</span> ||
+        COALESCE(new.tool_name, <span class="s">''</span>) || <span class="s">' '</span> ||
+        COALESCE(new.tool_calls, <span class="s">''</span>)
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    DELETE FROM messages_fts WHERE rowid = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
+    DELETE FROM messages_fts WHERE rowid = old.id;
+    INSERT INTO messages_fts(rowid, content) VALUES (
+        new.id,
+        COALESCE(new.content, <span class="s">''</span>) || <span class="s">' '</span> ||
+        COALESCE(new.tool_name, <span class="s">''</span>) || <span class="s">' '</span> ||
+        COALESCE(new.tool_calls, <span class="s">''</span>)
+    );
+END;
+</code></pre>
+
+<p>设计细节:</p>
+
+<ul>
+  <li><strong>串接 3 个字段</strong>:索引 "content + tool_name + tool_calls"。
+      于是搜 "用过 docker" 能找到调过 docker 工具的 turn——<em>即使 content 里没写 "docker" 字</em>。
+      这极大扩展了 LLM 用 <code>session_search</code> 的查全率。</li>
+  <li><strong>UPDATE 是 DELETE + INSERT</strong>:FTS5 不支持<em>原地</em>更新,删旧 row 再插。</li>
+  <li><strong>COALESCE 防 NULL</strong>:某些 row 没 tool_name(普通 user 消息),
+      <code>NULL || ' ' || 'foo'</code> 在 SQLite 里是 NULL ——必须 COALESCE 兜底。
+      经典 SQL 陷阱。</li>
+</ul>
+
+<h3>9.12.3 跨 session 搜索查询</h3>
+
+<pre><code><span class="filename">hermes_state.py:2176-2216 (摘要)</span>
+where_clauses = [<span class="s">"messages_fts MATCH ?"</span>]
+params = [query]
+
+<span class="c"># 多种维度过滤:source(平台)/role/excluded</span>
+<span class="k">if</span> source_filter:
+    where_clauses.<span class="f">append</span>(<span class="f">f</span><span class="s">"s.source IN ({','.join('?' for _ in source_filter)})"</span>)
+    params.<span class="f">extend</span>(source_filter)
+<span class="k">if</span> role_filter:
+    where_clauses.<span class="f">append</span>(<span class="f">f</span><span class="s">"m.role IN ({','.join('?' for _ in role_filter)})"</span>)
+    params.<span class="f">extend</span>(role_filter)
+
+sql = <span class="f">f</span><span class="s">"""
+    SELECT m.id, m.session_id, m.role,
+           snippet(messages_fts, 0, '&gt;&gt;&gt;', '&lt;&lt;&lt;', '...', 40) AS snippet,
+           m.content, m.timestamp, m.tool_name,
+           s.source, s.model, s.started_at AS session_started
+    FROM messages_fts
+    JOIN messages m ON m.id = messages_fts.rowid
+    JOIN sessions s ON s.id = m.session_id
+    WHERE {where_sql}
+    {order_by_sql}
+    LIMIT ? OFFSET ?
+"""</span>
+</code></pre>
+
+<p><code>snippet(messages_fts, 0, '&gt;&gt;&gt;', '&lt;&lt;&lt;', '...', 40)</code> 是 FTS5 内置函数,
+返回 40 token 上下文窗口,匹配词被 <code>&gt;&gt;&gt;...&lt;&lt;&lt;</code> 包围。
+LLM 收到的就是这种<em>带高亮的预览</em>而不是整条 message。token 节省巨大。</p>
+
+<h2 class="section"><span class="secnum">9.13</span>本章带走的</h2>
 
 <ul>
   <li><strong>Memory 是陈述性记忆</strong>。研究脉络：Generative Agents → MemGPT → ChatGPT Memory。</li>

@@ -1016,7 +1016,79 @@ system_prompt = <span class="s">"Repo has these files:\n- src/auth.py\n- src/db.
   接受"被骗一定会发生"，然后用 capability limitation 兜底（第 7 章核心论点）。
 </p>
 
-<h2 class="section"><span class="secnum">13.16</span>Hermes 在哪</h2>
+<h2 class="section"><span class="secnum">13.16</span>2026.05 现场:Opus 4.8 / GPT-5.5 / Mythos Preview</h2>
+
+<p>本书写作期间(2026.05),前沿模型又走了一大步。三件事值得记入历史:</p>
+
+<h3>13.16.1 Claude Opus 4.8(2026.05.28)</h3>
+
+<p>Anthropic 5 月 28 日发 Opus 4.8。Agent 工程相关数据:</p>
+
+<table>
+  <thead>
+    <tr><th>Benchmark</th><th>Opus 4.7</th><th>Opus 4.8</th><th>提升</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>SWE-Bench Verified</td><td>87.6%</td><td><strong>88.6%</strong></td><td>+1.0</td></tr>
+    <tr><td>SWE-Bench Pro</td><td>64.3%</td><td><strong>69.2%</strong></td><td>+4.9</td></tr>
+    <tr><td>MCP-Atlas</td><td>77.3%</td><td><strong>82.2%</strong></td><td>+4.9</td></tr>
+    <tr><td>BrowseComp (单 agent)</td><td>79.3%</td><td><strong>84.3%</strong></td><td>+5.0</td></tr>
+    <tr><td>Artificial Analysis Elo</td><td>1753</td><td><strong>1890</strong></td><td>+137</td></tr>
+  </tbody>
+</table>
+
+<p>更值钱的细节:Opus 4.8 用 <strong>15% 更少 turns</strong>、<strong>35% 更少 output tokens</strong>
+完成同样 SWE-Bench 任务,且<em>"放过自己代码 bug"的频率比 4.7 少 4 倍</em>。</p>
+
+<p>对 Agent 工程的启示:<em>同一 harness</em>(比如 Hermes)+ 新 model 不是简单替换。
+   Opus 4.8 在多步任务上"更克制"——之前 harness 里那些<em>"防 4.7 啰嗦"</em>的提示词
+   可能反而压制 4.8 的能力。<strong>harness 和 model 是 co-evolving 的</strong>。</p>
+
+<p>定价:input $5/M、output $25/M(与 4.7 持平)。可选 fast mode 2.5× 速度但 $10/$50,
+   比之前 model 的 fast mode 便宜 3 倍。</p>
+
+<h3>13.16.2 Claude Mythos Preview:Project Glasswing</h3>
+
+<p>Anthropic 4 月还发了 <strong>Mythos Preview</strong>——但<em>不公开</em>,
+只给 Project Glasswing 联盟成员。Benchmark 让人吃惊:</p>
+
+<ul>
+  <li><strong>SWE-Bench Verified: 93.9%</strong>(Opus 4.8 是 88.6%)</li>
+  <li><strong>SWE-Bench Pro: 77.8%</strong>(领先第二名 20.1 分)</li>
+  <li><strong>Terminal-Bench 2.0: 82.0%</strong>(对照 GPT-5.5 的 82.7% 几乎持平)</li>
+  <li><strong>GPQA Diamond: 94.6%</strong></li>
+  <li>BenchLM 综合榜 #1/119,综合分 99/100</li>
+</ul>
+
+<p>对 Agent 工程意义:Mythos 的<em>编程榜单平均分 100/100</em> 意味着
+"<em>SWE-Bench Verified 80% 是天花板</em>"的认知被推翻。
+Hermes 这种 harness 的设计空间——比如<em>"保守的 1-2 次失败熔断"</em>(ch16)、<em>"15 分钟 claim TTL"</em>(ch16)——
+可能在 Mythos-class model 上要重新调:更强的 reasoning + 更稳的 self-evaluation 意味着
+可以放更宽的失败容忍度,把"等下来人工 check"的边界往后推。</p>
+
+<h3>13.16.3 GPT-5.5(2026.04)</h3>
+
+<p>OpenAI 4 月发 GPT-5.5,主打 agentic 能力。最值得记的数字:</p>
+
+<ul>
+  <li><strong>Terminal-Bench 2.0: 82.7%</strong>(SOTA,Opus 4.7 才 69.4%)</li>
+  <li>13 分领先 Opus 4.7,3.4 分领先 Claude Mythos</li>
+</ul>
+
+<p>Terminal-Bench 2.0 测的是真实 shell 任务——<em>不能装的</em>。
+GPT-5.5 在这上面领先意味着 OpenAI 的 agent harness 把
+"shell 命令 + 文件操作 + 进程管理"调教得很扎实。
+Cursor 用 Sonnet 4.6 仍然能干生产活但落后了——这印证 ch13 早讲的"<em>harness vs model 谁更重要</em>"
+今天的答案是:<strong>顶尖 harness × 顶尖 model 才能拿榜首</strong>。</p>
+
+<div class="callout research">
+  <span class="label">2026.05 给本书的启示</span>
+  本书前 13 章讲的工程实践——budget control、failure breaker、prompt cache 经济、
+  capability security——都没过时。但<em>"具体数字"</em>(熔断阈值、超时秒数、并发上限)
+  在 Mythos-class model 上要重新调。读者拿到的是<em>方法论</em>,数字要自己跑 benchmark 校准。
+</div>
+
+<h2 class="section"><span class="secnum">13.17</span>Hermes 在哪</h2>
 
 <p>把 Hermes 标在这张地图上：</p>
 
@@ -1055,7 +1127,7 @@ flowchart LR
 <p>结论：<em>Hermes 不是 cutting-edge 研究项目，但它把所有 cutting-edge 工程实践都整合进了一个能跑的开源 framework</em>。
    这就是为什么本书拿它当 textbook——你看一份代码，学完整个 2024–2026 的工程沉淀。</p>
 
-<h2 class="section"><span class="secnum">13.17</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">13.18</span>本章带走的</h2>
 
 <ul>
   <li><strong>2024 是转折点</strong>：Function Calling 协议成熟、Computer Use、MCP、Anthropic 指南——Agent 从 demo 走向产品。</li>

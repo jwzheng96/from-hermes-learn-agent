@@ -774,7 +774,90 @@ _persistent_loops: Dict[int, asyncio.AbstractEventLoop] = {}
    <code>get_tool_definitions</code> 里用 dynamic override 动态加上这种跨引用，
    而不是写死在 static schema 里。</p>
 
-<h2 class="section"><span class="secnum">6.9</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">6.9</span>代码深挖:check_fn TTL 缓存 + dynamic schema override</h2>
+
+<p>第 6.5 节我们提到 <code>check_fn()</code> 结果会被 30 秒 TTL 缓存,以及 <code>dynamic_schema_overrides</code>
+让 schema 反映运行时配置。这两个机制的具体实现都值得细读——是简单代码里的精细设计。</p>
+
+<h3>6.9.1 _check_fn_cached:tuple-of-(timestamp, value)</h3>
+
+<pre><code><span class="filename">tools/registry.py:121-142</span>
+_CHECK_FN_TTL_SECONDS = <span class="num">30.0</span>
+_check_fn_cache: Dict[Callable, <span class="f">tuple</span>[float, bool]] = {}
+_check_fn_cache_lock = threading.<span class="f">Lock</span>()
+
+
+<span class="k">def</span> <span class="f">_check_fn_cached</span>(fn: Callable) <span class="k">-&gt;</span> bool:
+    <span class="s">"""Return bool(fn()), TTL-cached across calls. Swallows exceptions as False."""</span>
+    now = time.<span class="f">monotonic</span>()
+    <span class="k">with</span> _check_fn_cache_lock:
+        cached = _check_fn_cache.<span class="f">get</span>(fn)
+        <span class="k">if</span> cached <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            ts, value = cached
+            <span class="k">if</span> now - ts &lt; _CHECK_FN_TTL_SECONDS:
+                <span class="k">return</span> value
+    <span class="k">try</span>:
+        value = <span class="f">bool</span>(<span class="f">fn</span>())
+    <span class="k">except</span> Exception:
+        value = <span class="k">False</span>
+    <span class="k">with</span> _check_fn_cache_lock:
+        _check_fn_cache[fn] = (now, value)
+    <span class="k">return</span> value
+
+
+<span class="k">def</span> <span class="f">invalidate_check_fn_cache</span>() <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Drop all cached check_fn results. Call after `hermes tools enable`."""</span>
+    <span class="k">with</span> _check_fn_cache_lock:
+        _check_fn_cache.<span class="f">clear</span>()
+</code></pre>
+
+<p>三个非显然的细节:</p>
+
+<ol>
+  <li><strong>tuple-of-(timestamp, value)</strong>而非有 expire 后台线程。<em>读时</em>判 TTL,无后台 work。</li>
+  <li><strong><code>time.monotonic()</code></strong> 不是 <code>time.time()</code>。容器里 wall clock 可能被 NTP 调整,
+      monotonic 不受影响——TTL 计算永远正确。</li>
+  <li><strong><code>except Exception → False</code></strong>:check_fn 抛错就视为不可用。
+      宁可隐藏一个本可工作的工具(用户后续 fix env 后 30 秒内会 self-heal),
+      也不让 import error 把整个 schema 加载流程挂掉。</li>
+</ol>
+
+<h3>6.9.2 dynamic_schema_overrides 的"浅拷贝"安全约束</h3>
+
+<p>看 <code>tools/delegate_tool.py</code> 怎么用 dynamic override 让工具描述反映用户当前的并发上限设置:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:2638-2657</span>
+<span class="k">def</span> <span class="f">_build_dynamic_schema_overrides</span>() <span class="k">-&gt;</span> dict:
+    <span class="s">"""Return per-call schema overrides reflecting current config.
+
+    Plugged into ToolEntry.dynamic_schema_overrides so every
+    get_definitions() pass rewrites description fields to user's
+    actual limits.
+    """</span>
+    overrides_params = {
+        **DELEGATE_TASK_SCHEMA[<span class="s">"parameters"</span>],
+    }
+    <span class="c"># Shallow-copy properties so we don't mutate the static schema dict.</span>
+    overrides_params[<span class="s">"properties"</span>] = {
+        k: <span class="f">dict</span>(v) <span class="k">for</span> k, v <span class="k">in</span> DELEGATE_TASK_SCHEMA[<span class="s">"parameters"</span>][<span class="s">"properties"</span>].<span class="f">items</span>()
+    }
+    overrides_params[<span class="s">"properties"</span>][<span class="s">"tasks"</span>][<span class="s">"description"</span>] = <span class="f">_build_tasks_param_description</span>()
+    overrides_params[<span class="s">"properties"</span>][<span class="s">"role"</span>][<span class="s">"description"</span>] = <span class="f">_build_role_param_description</span>()
+    <span class="k">return</span> {
+        <span class="s">"description"</span>: <span class="f">_build_top_level_description</span>(),
+        <span class="s">"parameters"</span>: overrides_params,
+    }
+</code></pre>
+
+<div class="callout tip">
+  <span class="label">设计精妙</span>
+  这里只做<em>浅</em>拷贝(<code>dict(v)</code> 给每个 property 创建新顶层 dict,但<em>嵌套</em>结构共享指针)。
+  这<em>有意限制</em>了 override 能做的事——只能改顶层 <code>description</code> 字符串,不能改嵌套字段。
+  如果未来某 callback 尝试改嵌套字段,会污染 static schema,bug 会显现。
+  这种<em>"通过数据结构约束行为"</em>的设计比写一堆 assertion 干净。
+</div>
+
+<h2 class="section"><span class="secnum">6.10</span>本章带走的</h2>
 
 <ul>
   <li>每个工具是<strong>四件套</strong>：handler + check_fn + schema + register 调用。模块级副作用注册。</li>

@@ -643,7 +643,143 @@ model:
 <p>这是<em>对生态的承诺</em>。Hermes 不想做"所有功能都在我这"的胖框架，
    它想做"thin core + 强生态"的瘦平台。</p>
 
-<h2 class="section"><span class="secnum">12.11</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">12.11</span>代码深挖:Anthropic 适配 + plugin hook 容错</h2>
+
+<h3>12.11.1 Anthropic 的 thinking block 保留</h3>
+
+<p>Anthropic Messages API 把"思考块"作为 first-class structured data:</p>
+
+<pre><code><span class="filename">agent/anthropic_adapter.py:1470-1480, 1578-1592</span>
+<span class="k">def</span> <span class="f">_build_anthropic_tools</span>(tools) <span class="k">-&gt;</span> <span class="f">list</span>[dict]:
+    <span class="s">"""Convert OpenAI-style tool dicts to Anthropic tools array."""</span>
+    result = []
+    <span class="k">for</span> t <span class="k">in</span> tools <span class="k">or</span> []:
+        fn = t.<span class="f">get</span>(<span class="s">"function"</span>, {})
+        anthropic_tool = {
+            <span class="s">"name"</span>: fn.<span class="f">get</span>(<span class="s">"name"</span>, <span class="s">""</span>),
+            <span class="s">"description"</span>: fn.<span class="f">get</span>(<span class="s">"description"</span>, <span class="s">""</span>),
+            <span class="s">"input_schema"</span>: <span class="f">_normalize_tool_input_schema</span>(fn.<span class="f">get</span>(<span class="s">"parameters"</span>, {...})),
+        }
+        <span class="c"># Forward cache_control 标记 — Anthropic tools 数组也支持 cache</span>
+        cache_control = t.<span class="f">get</span>(<span class="s">"cache_control"</span>)
+        <span class="k">if</span> <span class="f">isinstance</span>(cache_control, dict):
+            anthropic_tool[<span class="s">"cache_control"</span>] = <span class="f">dict</span>(cache_control)
+        result.<span class="f">append</span>(anthropic_tool)
+    <span class="k">return</span> result
+
+
+<span class="k">def</span> <span class="f">_extract_preserved_thinking_blocks</span>(message) <span class="k">-&gt;</span> List[Dict[str, Any]]:
+    <span class="s">"""Return Anthropic thinking blocks previously preserved on the message.
+
+    Thinking blocks 在 message['reasoning_details'] 里存为
+    {'type': 'thinking' or 'redacted_thinking', ...} dicts.
+    重放 assistant message 时(历史回放、branch),把它们复制回下一次请求
+    让模型看到自己的 reasoning 轨迹。"""</span>
+    raw_details = message.<span class="f">get</span>(<span class="s">"reasoning_details"</span>)
+    <span class="k">if</span> <span class="k">not</span> <span class="f">isinstance</span>(raw_details, <span class="f">list</span>):
+        <span class="k">return</span> []
+
+    preserved = []
+    <span class="k">for</span> detail <span class="k">in</span> raw_details:
+        <span class="k">if</span> <span class="k">not</span> <span class="f">isinstance</span>(detail, dict):
+            <span class="k">continue</span>
+        block_type = <span class="f">str</span>(detail.<span class="f">get</span>(<span class="s">"type"</span>, <span class="s">""</span>)).<span class="f">strip</span>().<span class="f">lower</span>()
+        <span class="k">if</span> block_type <span class="k">not</span> <span class="k">in</span> {<span class="s">"thinking"</span>, <span class="s">"redacted_thinking"</span>}:
+            <span class="k">continue</span>
+        preserved.<span class="f">append</span>(copy.<span class="f">deepcopy</span>(detail))
+    <span class="k">return</span> preserved
+</code></pre>
+
+<p>三件值得注意的事:</p>
+
+<ol>
+  <li><strong><code>redacted_thinking</code></strong>:Anthropic 对某些类型 reasoning 内部做了 redact
+      (政治/敏感),但保留<em>"这里有思考"</em>的 placeholder。下轮要 echo 这个 placeholder
+      (不是 strip)否则模型推理连续性破坏。</li>
+  <li><strong><code>copy.deepcopy</code></strong>:thinking blocks 可能含 nested signature
+      (Anthropic 签名)。<em>必须</em>深拷贝——浅拷贝改了一个 signature 会污染 session 历史。</li>
+  <li><strong>OpenAI 兼容 endpoint 也走这段</strong>:即使用户用 OpenRouter 走 Anthropic 模型,
+      reasoning_details 字段仍然要保留——因为 OpenRouter 透传 Anthropic 的 thinking 字段。</li>
+</ol>
+
+<h3>12.11.2 invoke_hook 的 try/except 隔离</h3>
+
+<pre><code><span class="filename">hermes_cli/plugins.py:1451-1486</span>
+<span class="k">def</span> <span class="f">invoke_hook</span>(self, hook_name: str, **kwargs) <span class="k">-&gt;</span> List[Any]:
+    <span class="s">"""Call all registered callbacks for hook_name.
+
+    Each callback wrapped in its own try/except so a misbehaving
+    plugin cannot break the core agent loop.
+
+    Returns list of non-None return values.
+
+    For pre_llm_call, callbacks may return dict for context injection:
+        {"context": "recalled text..."}
+        "recalled text..."          # plain string equivalent
+
+    Context is ALWAYS injected into user message, never system prompt.
+    Preserves prompt cache prefix — system stays identical, cached
+    tokens reused. All injected context is ephemeral — never persisted."""</span>
+    callbacks = self._hooks.<span class="f">get</span>(hook_name, [])
+    results = []
+    <span class="k">for</span> cb <span class="k">in</span> callbacks:
+        <span class="k">try</span>:
+            ret = <span class="f">cb</span>(**kwargs)
+            <span class="k">if</span> ret <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+                results.<span class="f">append</span>(ret)
+        <span class="k">except</span> Exception <span class="k">as</span> exc:
+            logger.<span class="f">warning</span>(
+                <span class="s">"Hook '%s' callback %s raised: %s"</span>,
+                hook_name,
+                <span class="f">getattr</span>(cb, <span class="s">"__name__"</span>, <span class="f">repr</span>(cb)),
+                exc,
+            )
+    <span class="k">return</span> results
+</code></pre>
+
+<div class="callout">
+  <span class="label">设计哲学</span>
+  Docstring 第三段提到 <em>"Context is ALWAYS injected into user message, never system prompt"</em>——
+  这是 ch05 prompt cache 教训的<em>制度化</em>。即使插件作者无意中想注入到 system,
+  invoke_hook 的设计本身就把这个能力收走了。
+  <em>"不让用户错"比"教用户对"</em>更可靠。
+</div>
+
+<h3>12.11.3 Plugin 发现 4 个源</h3>
+
+<pre><code><span class="filename">hermes_cli/plugins.py:1292-1317 (entry_points)</span>
+<span class="k">def</span> <span class="f">_scan_entry_points</span>(self) <span class="k">-&gt;</span> List[PluginManifest]:
+    <span class="s">"""Check importlib.metadata for pip-installed plugins."""</span>
+    manifests = []
+    <span class="k">try</span>:
+        eps = importlib.metadata.<span class="f">entry_points</span>()
+        <span class="c"># Python 3.12+ SelectableGroups; 3.11 dict; 3.10 list</span>
+        <span class="k">if</span> <span class="f">hasattr</span>(eps, <span class="s">"select"</span>):
+            group_eps = eps.<span class="f">select</span>(group=ENTRY_POINTS_GROUP)
+        <span class="k">elif</span> <span class="f">isinstance</span>(eps, dict):
+            group_eps = eps.<span class="f">get</span>(ENTRY_POINTS_GROUP, [])
+        <span class="k">else</span>:
+            group_eps = [ep <span class="k">for</span> ep <span class="k">in</span> eps <span class="k">if</span> ep.group == ENTRY_POINTS_GROUP]
+
+        <span class="k">for</span> ep <span class="k">in</span> group_eps:
+            manifest = <span class="f">PluginManifest</span>(
+                name=ep.name,
+                source=<span class="s">"entrypoint"</span>,
+                path=ep.value,
+                key=ep.name,
+            )
+            manifests.<span class="f">append</span>(manifest)
+    <span class="k">except</span> Exception <span class="k">as</span> exc:
+        logger.<span class="f">debug</span>(<span class="s">"Entry-point scan failed: %s"</span>, exc)
+    <span class="k">return</span> manifests
+</code></pre>
+
+<p>Python 3.10/3.11/3.12 三个版本对 <code>entry_points()</code> 返回类型不同——
+   Hermes 用 <em>"动态特性检测"</em>(<code>hasattr(eps, "select")</code>) 而不是 <code>sys.version_info</code> 判断。
+   <em>前向兼容更稳</em>:Python 3.13 如果又改 API,只要新 API 有 <code>select()</code> 仍然能跑。
+   这是<em>"鸭子类型 + try/except"</em>的标准 Python idiom。</p>
+
+<h2 class="section"><span class="secnum">12.12</span>本章带走的</h2>
 
 <ul>
   <li>30 个 Provider 通过<strong>声明式 ProviderProfile</strong> 接入。简单 provider 几行字段，复杂 provider 重载方法处理 quirks。</li>

@@ -812,7 +812,86 @@ timeline
   跟写代码注释类似——细节越具体越好。
 </div>
 
-<h2 class="section"><span class="secnum">8.12</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">8.12</span>代码深挖:模板变量与 inline shell</h2>
+
+<p>第 8.6 节提到 SKILL.md 支持模板变量 + inline shell 展开。看实际的两个核心函数:</p>
+
+<h3>8.12.1 substitute_template_vars:极简白名单</h3>
+
+<pre><code><span class="filename">agent/skill_preprocessing.py:10-60 (摘要)</span>
+<span class="c"># 只允许 ${HERMES_SKILL_DIR} 和 ${HERMES_SESSION_ID} 两个 token。</span>
+<span class="c"># 未匹配的 token <em>保留原样</em>,方便作者 debug。</span>
+_SKILL_TEMPLATE_RE = re.<span class="f">compile</span>(<span class="s">r"\$\{(HERMES_SKILL_DIR|HERMES_SESSION_ID)\}"</span>)
+
+<span class="c"># inline shell:!`cmd`(非贪婪,不跨行)</span>
+_INLINE_SHELL_RE = re.<span class="f">compile</span>(<span class="s">r"!`([^`\n]+)`"</span>)
+
+<span class="c"># 输出上限 — 防一条流氓命令塞爆 context</span>
+_INLINE_SHELL_MAX_OUTPUT = <span class="num">4000</span>
+
+
+<span class="k">def</span> <span class="f">substitute_template_vars</span>(content, skill_dir, session_id):
+    <span class="s">"""Replace ${HERMES_SKILL_DIR} / ${HERMES_SESSION_ID} in skill content.
+
+    Only substitutes tokens for which a concrete value is available —
+    unresolved tokens are left in place so the author can spot them.
+    """</span>
+    skill_dir_str = <span class="f">str</span>(skill_dir) <span class="k">if</span> skill_dir <span class="k">else</span> <span class="k">None</span>
+
+    <span class="k">def</span> <span class="f">_replace</span>(match):
+        token = match.<span class="f">group</span>(<span class="num">1</span>)
+        <span class="k">if</span> token == <span class="s">"HERMES_SKILL_DIR"</span> <span class="k">and</span> skill_dir_str:
+            <span class="k">return</span> skill_dir_str
+        <span class="k">if</span> token == <span class="s">"HERMES_SESSION_ID"</span> <span class="k">and</span> session_id:
+            <span class="k">return</span> <span class="f">str</span>(session_id)
+        <span class="k">return</span> match.<span class="f">group</span>(<span class="num">0</span>)        <span class="c"># 没值就留原样</span>
+
+    <span class="k">return</span> _SKILL_TEMPLATE_RE.<span class="f">sub</span>(_replace, content)
+</code></pre>
+
+<p><em>没有</em> <code>{{config.foo}}</code> 这种通用配置插值——只有 SKILL_DIR 和 SESSION_ID 两个变量。
+原因:配置插值会引入"用户改了一个 config 就让所有 skill 行为变"的隐式耦合。
+SKILL.md 应该<em>自包含</em>,所以 Hermes 限制极严。</p>
+
+<h3>8.12.2 run_inline_shell:timeout-only 安全</h3>
+
+<pre><code><span class="filename">agent/skill_preprocessing.py:63-121 (摘要)</span>
+<span class="k">def</span> <span class="f">run_inline_shell</span>(command, cwd, timeout):
+    <span class="s">"""Execute a single inline-shell snippet and return its stdout (trimmed).
+
+    Failures return a [inline-shell error: ...] marker, not raise."""</span>
+    <span class="k">try</span>:
+        completed = subprocess.<span class="f">run</span>(
+            [<span class="s">"bash"</span>, <span class="s">"-c"</span>, command],
+            cwd=<span class="f">str</span>(cwd) <span class="k">if</span> cwd <span class="k">else</span> <span class="k">None</span>,
+            capture_output=<span class="k">True</span>, text=<span class="k">True</span>,
+            timeout=<span class="f">max</span>(<span class="num">1</span>, <span class="f">int</span>(timeout)),
+            check=<span class="k">False</span>,
+        )
+    <span class="k">except</span> subprocess.TimeoutExpired:
+        <span class="k">return</span> <span class="f">f</span><span class="s">"[inline-shell timeout after {timeout}s: {command}]"</span>
+    <span class="k">except</span> FileNotFoundError:
+        <span class="k">return</span> <span class="s">"[inline-shell error: bash not found]"</span>
+    <span class="k">except</span> Exception <span class="k">as</span> exc:
+        <span class="k">return</span> <span class="f">f</span><span class="s">"[inline-shell error: {exc}]"</span>
+
+    output = (completed.stdout <span class="k">or</span> <span class="s">""</span>).<span class="f">rstrip</span>(<span class="s">"\n"</span>)
+    <span class="k">if</span> <span class="k">not</span> output <span class="k">and</span> completed.stderr:
+        output = completed.stderr.<span class="f">rstrip</span>(<span class="s">"\n"</span>)
+    <span class="k">if</span> <span class="f">len</span>(output) &gt; _INLINE_SHELL_MAX_OUTPUT:
+        output = output[:_INLINE_SHELL_MAX_OUTPUT] + <span class="s">"...[truncated]"</span>
+    <span class="k">return</span> output
+</code></pre>
+
+<div class="callout warn">
+  <span class="label">无沙箱,只有 timeout</span>
+  <em>"safety layer 只有 timeout 和 graceful error"</em>——任何 bash 命令都直接 <code>subprocess.run()</code>。
+  没有 allowlist、没有 chroot、没有 seccomp。
+  这是<em>故意</em>的设计:inline shell 是给"你自己写的 SKILL.md"用的,不该跑别人不可信的 SKILL.md。
+  如果安装了第三方 skill,Hermes 配置项 <code>skills.inline_shell</code> <em>默认关</em>,需要 opt-in。
+</div>
+
+<h2 class="section"><span class="secnum">8.13</span>本章带走的</h2>
 
 <ul>
   <li>Agent 的<strong>"程序性记忆"</strong>对应人脑的肌肉记忆。它是关于<em>"做某类事情的方法"</em>。</li>

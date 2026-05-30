@@ -559,7 +559,91 @@ flowchart TB
   这就是为什么 Hermes 这么强调"create + recall + prune"是同一个闭环。
 </p>
 
-<h2 class="section"><span class="secnum">10.12</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">10.12</span>代码深挖:Curator 的 review prompt</h2>
+
+<p>第 10.6 节提到 Curator 会启动 auxiliary review agent。它的实际 prompt 是 130 行
+长——堪称"如何把工程哲学塞进 system prompt"的范本。截取核心:</p>
+
+<pre><code><span class="filename">agent/curator.py:330-445 (摘要)</span>
+CURATOR_REVIEW_PROMPT = (
+    <span class="s">"You are running as Hermes' background skill CURATOR. This is an "</span>
+    <span class="s">"UMBRELLA-BUILDING consolidation pass, not a passive audit and not a "</span>
+    <span class="s">"duplicate-finder.\n\n"</span>
+
+    <span class="s">"The goal of the skill collection is a LIBRARY OF CLASS-LEVEL "</span>
+    <span class="s">"INSTRUCTIONS AND EXPERIENTIAL KNOWLEDGE. A collection of hundreds of "</span>
+    <span class="s">"narrow skills where each one captures one session's specific bug is "</span>
+    <span class="s">"a FAILURE of the library — not a feature. An agent searching skills "</span>
+    <span class="s">"matches on descriptions, not on exact names; one broad umbrella "</span>
+    <span class="s">"skill with labeled subsections beats five narrow siblings for "</span>
+    <span class="s">"discoverability, not the other way around.\n\n"</span>
+
+    <span class="s">"Hard rules — do not violate:\n"</span>
+    <span class="s">"1. DO NOT touch bundled or hub-installed skills.\n"</span>
+    <span class="s">"2. DO NOT delete any skill. Archiving is the maximum destructive action.\n"</span>
+    <span class="s">"3. DO NOT touch skills shown as pinned=yes.\n"</span>
+    <span class="s">"4. DO NOT use usage counters as a reason to skip consolidation. "</span>
+    <span class="s">"   'use=0' is not evidence a skill is valuable; it's absence of evidence either way.\n"</span>
+    <span class="s">"5. DO NOT reject consolidation on the grounds that 'each skill has "</span>
+    <span class="s">"   a distinct trigger'. Pairwise distinctness is the wrong bar.\n\n"</span>
+
+    <span class="s">"How to work:\n"</span>
+    <span class="s">"1. Scan the candidate list. Identify PREFIX CLUSTERS — skills sharing\n"</span>
+    <span class="s">"   a first word or domain keyword. Expect 10-25 clusters.\n"</span>
+    <span class="s">"2. For each cluster with 2+ members, ask 'what is the UMBRELLA CLASS\n"</span>
+    <span class="s">"   these skills all serve?' — not 'are these pairs overlapping?'.\n"</span>
+    <span class="s">"3. Three consolidation strategies:\n"</span>
+    <span class="s">"   a. MERGE INTO EXISTING UMBRELLA — one member already broad enough,\n"</span>
+    <span class="s">"      patch it to add sections, archive siblings.\n"</span>
+    <span class="s">"   b. CREATE A NEW UMBRELLA SKILL.md — when no member is broad enough.\n"</span>
+    <span class="s">"   c. DEMOTE TO REFERENCES/TEMPLATES/SCRIPTS — narrow but valuable\n"</span>
+    <span class="s">"      session-specific content moves to:\n"</span>
+    <span class="s">"      • references/&lt;topic&gt;.md for condensed knowledge banks\n"</span>
+    <span class="s">"      • templates/&lt;name&gt;.&lt;ext&gt; for starter files\n"</span>
+    <span class="s">"      • scripts/&lt;name&gt;.&lt;ext&gt; for re-runnable actions\n\n"</span>
+
+    <span class="s">"Expected output: real umbrella-ification. If you end with fewer than\n"</span>
+    <span class="s">"10 archives, you stopped too early — go back to the clusters you left alone.\n\n"</span>
+
+    <span class="s">"When done, write a YAML block:\n"</span>
+    <span class="s">"```yaml\n"</span>
+    <span class="s">"consolidations:\n"</span>
+    <span class="s">"  - from: &lt;old-skill&gt;\n"</span>
+    <span class="s">"    into: &lt;umbrella&gt;\n"</span>
+    <span class="s">"    reason: &lt;why merged, not just 'similar'&gt;\n"</span>
+    <span class="s">"prunings:\n"</span>
+    <span class="s">"  - name: &lt;skill&gt;\n"</span>
+    <span class="s">"    reason: &lt;why archived with no merge target&gt;\n"</span>
+    <span class="s">"```\n"</span>
+    <span class="s">"Every archived skill MUST appear in one of the two lists.\n"</span>
+)
+</code></pre>
+
+<p>这个 prompt 教会我们 5 件事:</p>
+
+<ol>
+  <li><strong>预设错误反例</strong>:第二段开头说<em>"几百个 narrow skill 是 FAILURE 不是 feature"</em>——
+      不是问 Agent 想不想 consolidate,是直接立场表达。</li>
+  <li><strong>反驳 LLM 常见借口</strong>:"DO NOT use 'use=0' as reason to skip consolidation"——
+      因为 LLM 看到 use_count=0 时倾向"留着以防万一"。
+      作者反过来预判这个 cognitive bias 并堵死。</li>
+  <li><strong>具体路径,不要选择题</strong>:不是"考虑 merge 或 keep",而是"3 种 consolidation 方式选 1"。
+      把<em>"不动"</em>这个选项的成本提高了。</li>
+  <li><strong>"&lt; 10 archives 你停太早"</strong>:量化压力,Agent 不会"礼貌"做 1-2 个就交差。</li>
+  <li><strong>结构化输出</strong>:YAML <code>consolidations:</code> vs <code>prunings:</code> 两个 list,
+      让 Curator 下游(cron 任务的 skill reference 迁移)可以<em>自动</em>把 <code>from</code> 的引用改成 <code>into</code>。
+      <em>不要让 LLM 之后再"猜"YAML 里说啥</em>——一次性输出可解析格式。</li>
+</ol>
+
+<div class="callout good">
+  <span class="label">这是"prompt engineering"上层例子</span>
+  当你想让 Agent 做<em>"我有强偏好"</em>的工作(图书馆员 / 编辑 / 审稿),
+  这个 prompt 是<em>结构模板</em>:开篇立场 + Hard rules + How to work + Output schema。
+  对比 ch05 讲 system prompt 缓存——这个 prompt 是 auxiliary client 用的,
+  不进主 session,所以可以很长不破 cache。
+</div>
+
+<h2 class="section"><span class="secnum">10.13</span>本章带走的</h2>
 
 <ul>
   <li>Agent 创建的 skill 会<em>腐烂</em>：过时、重复、未用、schema 漂移、注意力稀释。</li>

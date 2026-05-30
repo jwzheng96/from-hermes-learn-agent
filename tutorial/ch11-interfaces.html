@@ -748,7 +748,187 @@ flowchart TB
   </tbody>
 </table>
 
-<h2 class="section"><span class="secnum">11.12</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">11.12</span>代码深挖:profile override / CommandDef / PlatformAdapter</h2>
+
+<h3>11.12.1 _apply_profile_override 完整版</h3>
+
+<p>第 11.2 节我们讲了"导入前注入"的核心思想。看完整实现——8 个 edge case 各自处理:</p>
+
+<pre><code><span class="filename">hermes_cli/main.py:183-267</span>
+<span class="k">def</span> <span class="f">_apply_profile_override</span>() <span class="k">-&gt;</span> <span class="k">None</span>:
+    <span class="s">"""Pre-parse --profile/-p and set HERMES_HOME before module imports."""</span>
+    argv = sys.argv[<span class="num">1</span>:]
+    profile_name = <span class="k">None</span>
+    consume = <span class="num">0</span>
+
+    <span class="c"># 1. 显式 -p / --profile flag</span>
+    <span class="k">for</span> i, arg <span class="k">in</span> <span class="f">enumerate</span>(argv):
+        <span class="k">if</span> arg <span class="k">in</span> {<span class="s">"--profile"</span>, <span class="s">"-p"</span>} <span class="k">and</span> i + <span class="num">1</span> &lt; <span class="f">len</span>(argv):
+            profile_name = argv[i + <span class="num">1</span>]
+            consume = <span class="num">2</span>
+            <span class="k">break</span>
+        <span class="k">elif</span> arg.<span class="f">startswith</span>(<span class="s">"--profile="</span>):
+            profile_name = arg.<span class="f">split</span>(<span class="s">"="</span>, <span class="num">1</span>)[<span class="num">1</span>]
+            consume = <span class="num">1</span>
+            <span class="k">break</span>
+
+    <span class="c"># 1b. 防 pytest 误读:`-p no:xdist` 不该被当 profile "no:xdist"</span>
+    <span class="k">if</span> profile_name <span class="k">is</span> <span class="k">not</span> <span class="k">None</span> <span class="k">and</span> consume == <span class="num">2</span>:
+        <span class="k">import</span> re <span class="k">as</span> _re
+        <span class="k">if</span> <span class="k">not</span> _re.<span class="f">match</span>(<span class="s">r"^[a-z0-9][a-z0-9_-]{0,63}$"</span>, profile_name):
+            profile_name = <span class="k">None</span>
+            consume = <span class="num">0</span>
+
+    <span class="c"># 1.5 HERMES_HOME 已设但 path 是 profile 目录:信任,直接返回</span>
+    <span class="c">#     否则即使 systemd 硬编码了 /root/.hermes,仍读 active_profile</span>
+    <span class="c">#     —— 用户切了 profile,gateway 应该 honour. (issue #22502)</span>
+    hermes_home_env = os.environ.<span class="f">get</span>(<span class="s">"HERMES_HOME"</span>, <span class="s">""</span>)
+    <span class="k">if</span> profile_name <span class="k">is</span> <span class="k">None</span> <span class="k">and</span> hermes_home_env:
+        <span class="k">if</span> Path(hermes_home_env).parent.name == <span class="s">"profiles"</span>:
+            <span class="k">return</span>
+
+    <span class="c"># 2. 无 flag, fallback 到 active_profile 文件</span>
+    <span class="k">if</span> profile_name <span class="k">is</span> <span class="k">None</span>:
+        <span class="k">try</span>:
+            <span class="k">from</span> hermes_constants <span class="k">import</span> get_default_hermes_root
+            active_path = <span class="f">get_default_hermes_root</span>() / <span class="s">"active_profile"</span>
+            <span class="k">if</span> active_path.<span class="f">exists</span>():
+                name = active_path.<span class="f">read_text</span>().<span class="f">strip</span>()
+                <span class="k">if</span> name <span class="k">and</span> name != <span class="s">"default"</span>:
+                    profile_name = name
+                    consume = <span class="num">0</span>
+        <span class="k">except</span> (UnicodeDecodeError, OSError):
+            <span class="k">pass</span>
+
+    <span class="c"># 3. 解析 + 设 env var + 清 argv</span>
+    <span class="k">if</span> profile_name <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+        <span class="k">try</span>:
+            <span class="k">from</span> hermes_cli.profiles <span class="k">import</span> resolve_profile_env
+            hermes_home = <span class="f">resolve_profile_env</span>(profile_name)
+        <span class="k">except</span> (ValueError, FileNotFoundError) <span class="k">as</span> exc:
+            <span class="f">print</span>(<span class="f">f</span><span class="s">"Error: {exc}"</span>, file=sys.stderr)
+            sys.<span class="f">exit</span>(<span class="num">1</span>)
+        <span class="k">except</span> Exception <span class="k">as</span> exc:
+            <span class="c"># profiles.py 里 bug 绝不能阻止 hermes 启动</span>
+            <span class="f">print</span>(<span class="f">f</span><span class="s">"Warning: profile override failed ({exc}), using default"</span>,
+                  file=sys.stderr)
+            <span class="k">return</span>
+        os.environ[<span class="s">"HERMES_HOME"</span>] = hermes_home
+        <span class="k">if</span> consume &gt; <span class="num">0</span>:
+            <span class="k">for</span> i, arg <span class="k">in</span> <span class="f">enumerate</span>(argv):
+                ...    <span class="c"># 从 sys.argv 抹掉 --profile flag</span>
+
+
+<span class="f">_apply_profile_override</span>()    <span class="c"># 模块 import 时立刻执行</span>
+</code></pre>
+
+<p>8 个 edge case 都背了真实生产 bug:</p>
+
+<ol>
+  <li><strong>pytest 兼容</strong>:<code>pytest -p no:xdist</code> 不该被读成 profile 名。
+      用正则限制 profile 名只能 <code>[a-z0-9][a-z0-9_-]{0,63}</code>。</li>
+  <li><strong>HERMES_HOME 已是 profile path</strong>:<em>但不一定信任</em>——
+      systemd hardcoded HERMES_HOME 时,用户切了 profile gateway 应该跟随。
+      用 <code>parent.name == "profiles"</code> 区分"已是 profile path"vs"是根目录"。</li>
+  <li><strong>active_profile 文件 corrupted</strong>(UnicodeDecodeError、OSError)→ 静默 fallback</li>
+  <li><strong>profiles.py 里有 bug</strong> → warn + 继续用默认,绝不让 Hermes 起不来</li>
+  <li><strong>active_profile = "default"</strong> 等于没设</li>
+</ol>
+
+<h3>11.12.2 CommandDef 的 6 个消费者</h3>
+
+<p>第 11.4 节我们说<em>"中心化注册表 + 6 个 derived lookup"</em>。实际派生代码:</p>
+
+<pre><code><span class="filename">hermes_cli/commands.py:46-292 (核心)</span>
+<span class="k">@dataclass</span>
+<span class="k">class</span> <span class="n">CommandDef</span>:
+    name: str
+    description: str
+    category: str
+    aliases: <span class="f">tuple</span>[str, ...] = ()
+    args_hint: str = <span class="s">""</span>
+    subcommands: <span class="f">tuple</span>[str, ...] = ()
+    cli_only: bool = <span class="k">False</span>
+    gateway_only: bool = <span class="k">False</span>
+    gateway_config_gate: str <span class="k">|</span> <span class="k">None</span> = <span class="k">None</span>
+
+<span class="c"># ── 消费者 1:CLI dispatch ──────────────</span>
+_COMMAND_LOOKUP = {}
+<span class="k">for</span> cmd <span class="k">in</span> COMMAND_REGISTRY:
+    _COMMAND_LOOKUP[cmd.name] = cmd
+    <span class="k">for</span> alias <span class="k">in</span> cmd.aliases:
+        _COMMAND_LOOKUP[alias] = cmd
+
+<span class="k">def</span> <span class="f">resolve_command</span>(name):
+    <span class="k">return</span> _COMMAND_LOOKUP.<span class="f">get</span>(name.<span class="f">lower</span>().<span class="f">lstrip</span>(<span class="s">"/"</span>))
+
+<span class="c"># ── 消费者 2 &amp; 3:flat dict + categorized dict ──</span>
+COMMANDS = {}
+COMMANDS_BY_CATEGORY = {}
+<span class="k">for</span> _cmd <span class="k">in</span> COMMAND_REGISTRY:
+    <span class="k">if</span> <span class="k">not</span> _cmd.gateway_only:
+        COMMANDS[<span class="f">f</span><span class="s">"/{_cmd.name}"</span>] = <span class="f">_build_description</span>(_cmd)
+        _cat = COMMANDS_BY_CATEGORY.<span class="f">setdefault</span>(_cmd.category, {})
+        _cat[<span class="f">f</span><span class="s">"/{_cmd.name}"</span>] = COMMANDS[<span class="f">f</span><span class="s">"/{_cmd.name}"</span>]
+
+<span class="c"># ── 消费者 4:Subcommands(tab-complete) ──</span>
+SUBCOMMANDS = {}
+<span class="k">for</span> _cmd <span class="k">in</span> COMMAND_REGISTRY:
+    <span class="k">if</span> _cmd.subcommands:
+        SUBCOMMANDS[<span class="f">f</span><span class="s">"/{_cmd.name}"</span>] = <span class="f">list</span>(_cmd.subcommands)
+
+<span class="c"># ── 消费者 5:args_hint 的 pipe pattern → subcommands ──</span>
+_PIPE_SUBS_RE = re.<span class="f">compile</span>(<span class="s">r"[a-z]+(?:\|[a-z]+)+"</span>)
+<span class="k">for</span> _cmd <span class="k">in</span> COMMAND_REGISTRY:
+    key = <span class="f">f</span><span class="s">"/{_cmd.name}"</span>
+    <span class="k">if</span> key <span class="k">in</span> SUBCOMMANDS <span class="k">or</span> <span class="k">not</span> _cmd.args_hint:
+        <span class="k">continue</span>
+    m = _PIPE_SUBS_RE.<span class="f">search</span>(_cmd.args_hint)
+    <span class="k">if</span> m:
+        SUBCOMMANDS[key] = m.<span class="f">group</span>(<span class="num">0</span>).<span class="f">split</span>(<span class="s">"|"</span>)
+</code></pre>
+
+<p>关键工程:<em>消费者 5 是隐式 subcommand 来源</em>。
+某些命令 <code>args_hint="off|on|pause"</code> 写在 hint 里,
+但作者忘记在 <code>subcommands=(...)</code> 字段重复一遍——
+这段正则自动从 hint 里抽 pipe-separated 词作为补全候选。<em>DRY 原则</em>的代码级例子。</p>
+
+<h3>11.12.3 BasePlatformAdapter:_pending_messages 队列</h3>
+
+<pre><code><span class="filename">gateway/platforms/base.py:1389-1420, 3068-3085</span>
+<span class="k">class</span> <span class="n">BasePlatformAdapter</span>(<span class="n">ABC</span>):
+    <span class="k">def</span> <span class="f">__init__</span>(self, config, platform):
+        ...
+        <span class="c"># 当前 active session 集合(Agent 在跑)</span>
+        self._active_sessions: Dict[str, asyncio.Event] = {}
+        <span class="c"># 各 session 的"等待处理"消息(Agent 忙时进队)</span>
+        self._pending_messages: Dict[str, MessageEvent] = {}
+        self._session_tasks: Dict[str, asyncio.Task] = {}
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">async</span> <span class="k">def</span> <span class="f">connect</span>(self) <span class="k">-&gt;</span> bool: <span class="k">pass</span>
+
+    <span class="k">@abstractmethod</span>
+    <span class="k">async</span> <span class="k">def</span> <span class="f">send</span>(self, chat_id, content, reply_to=<span class="k">None</span>, metadata=<span class="k">None</span>): <span class="k">pass</span>
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">_drain_pending_after_session_command</span>(self, session_key, command_guard):
+        <span class="s">"""/stop, /new, /reset 等命令结束后调用。
+
+        释放 command guard,如果队列有 follow-up,生成新 task 处理。"""</span>
+        <span class="k">await</span> self.<span class="f">_flush_text_debounce_now</span>(session_key)
+        pending_event = self._pending_messages.<span class="f">pop</span>(session_key, <span class="k">None</span>)
+        self.<span class="f">_release_session_guard</span>(session_key, guard=command_guard)
+        <span class="k">if</span> pending_event <span class="k">is</span> <span class="k">None</span>:
+            <span class="k">return</span>
+        self.<span class="f">_start_session_processing</span>(pending_event, session_key)
+</code></pre>
+
+<p><code>_pending_messages</code> 是<em>每 session 只存 1 个</em>消息——不是 FIFO 队列。
+为什么? 因为这是"Agent 在跑你想插话"的场景。
+<em>"插队 2 次插队 3 次"</em>没意义——用户最后说的才是真意。新消息直接覆盖前一个。
+这种<em>"last-write-wins"</em>是 messaging 平台的合理简化。</p>
+
+<h2 class="section"><span class="secnum">11.13</span>本章带走的</h2>
 
 <ul>
   <li>Hermes 有<strong>三个出口</strong>：CLI、Gateway（20+ 平台）、ACP（IDE）。共用 AIAgent 核心。</li>

@@ -744,7 +744,138 @@ messages.<span class="f">append</span>({
   ④ 监控 cache hit rate，目标 &gt; 90%；&lt; 70% 必须查为什么。
 </div>
 
-<h2 class="section"><span class="secnum">5.11</span>本章带走的</h2>
+<h2 class="section"><span class="secnum">5.11</span>代码深挖:cache_control 注入与 token 追踪</h2>
+
+<h3>5.11.1 apply_anthropic_cache_control:"system_and_3" 策略</h3>
+
+<p>第 5.4 节说 Anthropic 4 个 breakpoint。看实际怎么放:</p>
+
+<pre><code><span class="filename">agent/prompt_caching.py:15-79</span>
+<span class="k">def</span> <span class="f">_apply_cache_marker</span>(msg, cache_marker, native_anthropic=<span class="k">False</span>):
+    <span class="s">"""Add cache_control to a single message, handling all format variations."""</span>
+    role = msg.<span class="f">get</span>(<span class="s">"role"</span>, <span class="s">""</span>)
+    content = msg.<span class="f">get</span>(<span class="s">"content"</span>)
+
+    <span class="k">if</span> role == <span class="s">"tool"</span>:
+        <span class="k">if</span> native_anthropic:
+            msg[<span class="s">"cache_control"</span>] = cache_marker
+        <span class="k">return</span>
+
+    <span class="k">if</span> content <span class="k">is</span> <span class="k">None</span> <span class="k">or</span> content == <span class="s">""</span>:
+        msg[<span class="s">"cache_control"</span>] = cache_marker
+        <span class="k">return</span>
+
+    <span class="k">if</span> <span class="f">isinstance</span>(content, str):
+        <span class="c"># 字符串 content → 转 list of content blocks,marker 放最后块</span>
+        msg[<span class="s">"content"</span>] = [
+            {<span class="s">"type"</span>: <span class="s">"text"</span>, <span class="s">"text"</span>: content, <span class="s">"cache_control"</span>: cache_marker}
+        ]
+        <span class="k">return</span>
+
+    <span class="k">if</span> <span class="f">isinstance</span>(content, <span class="f">list</span>) <span class="k">and</span> content:
+        last = content[-<span class="num">1</span>]
+        <span class="k">if</span> <span class="f">isinstance</span>(last, dict):
+            last[<span class="s">"cache_control"</span>] = cache_marker
+
+
+<span class="k">def</span> <span class="f">_build_marker</span>(ttl):
+    marker = {<span class="s">"type"</span>: <span class="s">"ephemeral"</span>}
+    <span class="k">if</span> ttl == <span class="s">"1h"</span>:
+        marker[<span class="s">"ttl"</span>] = <span class="s">"1h"</span>
+    <span class="k">return</span> marker
+
+
+<span class="k">def</span> <span class="f">apply_anthropic_cache_control</span>(api_messages, cache_ttl=<span class="s">"5m"</span>, native_anthropic=<span class="k">False</span>):
+    <span class="s">"""system_and_3 strategy: system + last 3 non-system messages, same TTL.
+
+    Returns deep copy with breakpoints injected."""</span>
+    messages = copy.<span class="f">deepcopy</span>(api_messages)
+    <span class="k">if</span> <span class="k">not</span> messages:
+        <span class="k">return</span> messages
+
+    marker = <span class="f">_build_marker</span>(cache_ttl)
+    breakpoints_used = <span class="num">0</span>
+
+    <span class="k">if</span> messages[<span class="num">0</span>].<span class="f">get</span>(<span class="s">"role"</span>) == <span class="s">"system"</span>:
+        <span class="f">_apply_cache_marker</span>(messages[<span class="num">0</span>], marker, native_anthropic=native_anthropic)
+        breakpoints_used += <span class="num">1</span>
+
+    remaining = <span class="num">4</span> - breakpoints_used
+    non_sys = [i <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(<span class="f">len</span>(messages)) <span class="k">if</span> messages[i].<span class="f">get</span>(<span class="s">"role"</span>) != <span class="s">"system"</span>]
+    <span class="k">for</span> idx <span class="k">in</span> non_sys[-remaining:]:
+        <span class="f">_apply_cache_marker</span>(messages[idx], marker, native_anthropic=native_anthropic)
+
+    <span class="k">return</span> messages
+</code></pre>
+
+<p>关键设计点:</p>
+
+<ol>
+  <li><strong>content 三种形态都处理</strong>:None/空 → 加 msg 级 cache_control;
+      string → <em>转</em> list of blocks 再加;list → 给最后块加。
+      这种"格式归一化"是 protocol adapter 的典型工作量。</li>
+  <li><strong>system_and_3 而不是 last_4</strong>:总是优先用 system prompt 占一个 breakpoint,
+      剩 3 个分给最近 3 条非 system 消息。
+      理由:system prompt 跨 turn 不变 → cache 复用最稳。
+      最近 3 条 user/assistant 是<em>"刚发的"</em>—— 下个 turn 又被新一轮变成"非最近 3 条"。</li>
+  <li><strong><code>copy.deepcopy</code></strong>:原 messages 不被污染——同一组 messages 可能在
+      retry / fallback 场景被多次调用,不允许 in-place 修改。</li>
+</ol>
+
+<h3>5.11.2 ContextCompressor 的 anti-thrash 保护</h3>
+
+<p>第 3.8 节我们说 compression 触发用真实 token 数。看完整状态机:</p>
+
+<pre><code><span class="filename">agent/context_compressor.py:578-634</span>
+<span class="k">class</span> <span class="n">ContextCompressor</span>:
+    <span class="k">def</span> <span class="f">__init__</span>(self, ...):
+        self.last_prompt_tokens = <span class="num">0</span>
+        self.last_completion_tokens = <span class="num">0</span>
+        self.last_total_tokens = <span class="num">0</span>
+
+        <span class="c"># Anti-thrashing 状态</span>
+        self._last_compression_savings_pct = <span class="num">100.0</span>
+        self._ineffective_compression_count = <span class="num">0</span>
+        self._summary_failure_cooldown_until = <span class="num">0.0</span>
+
+    <span class="k">def</span> <span class="f">update_from_response</span>(self, usage):
+        <span class="s">"""Update tracked token usage from API response."""</span>
+        self.last_prompt_tokens = usage.<span class="f">get</span>(<span class="s">"prompt_tokens"</span>, <span class="num">0</span>)
+        self.last_completion_tokens = usage.<span class="f">get</span>(<span class="s">"completion_tokens"</span>, <span class="num">0</span>)
+        self.last_total_tokens = usage.<span class="f">get</span>(<span class="s">"total_tokens"</span>,
+            self.last_prompt_tokens + self.last_completion_tokens)
+
+    <span class="k">def</span> <span class="f">should_compress</span>(self, prompt_tokens=<span class="k">None</span>):
+        <span class="s">"""Check if context exceeds compression threshold.
+
+        Anti-thrashing: if last 2 compressions each saved &lt; 10%, skip —
+        avoids infinite loops where each pass removes 1-2 messages."""</span>
+        tokens = prompt_tokens <span class="k">if</span> prompt_tokens <span class="k">is</span> <span class="k">not</span> <span class="k">None</span> <span class="k">else</span> self.last_prompt_tokens
+        <span class="k">if</span> tokens &lt; self.threshold_tokens:
+            <span class="k">return</span> <span class="k">False</span>
+        <span class="c"># 连续 2 次"压缩没省多少" → 跳过,告诉用户 /new</span>
+        <span class="k">if</span> self._ineffective_compression_count &gt;= <span class="num">2</span>:
+            <span class="k">if</span> <span class="k">not</span> self.quiet_mode:
+                logger.<span class="f">warning</span>(
+                    <span class="s">"Compression skipped — last %d compressions saved &lt;10%% each. "</span>
+                    <span class="s">"Consider /new to start a fresh session, or /compress &lt;topic&gt; "</span>
+                    <span class="s">"for focused compression."</span>,
+                    self._ineffective_compression_count,
+                )
+            <span class="k">return</span> <span class="k">False</span>
+        <span class="k">return</span> <span class="k">True</span>
+</code></pre>
+
+<div class="callout">
+  <span class="label">为什么是 2 次?</span>
+  <strong>1 次</strong>不够说明问题(可能恰好那次内容真的不好压)。
+  <strong>3 次</strong>太晚——已经浪费 2 次 LLM 调用钱了。
+  <strong>2 次</strong>是<em>"快速失败"</em>的甜点。
+  并且 warning 不是默默 skip——它<em>告诉用户具体怎么办</em>(<code>/new</code> 或 <code>/compress &lt;topic&gt;</code>)。
+  错误信息是给人看的"使用说明书",这是好工程。
+</div>
+
+<h2 class="section"><span class="secnum">5.12</span>本章带走的</h2>
 
 <ul>
   <li>Prompt cache 是 Agent 经济的命脉。命中 vs 未命中差 5–10 倍成本。</li>
