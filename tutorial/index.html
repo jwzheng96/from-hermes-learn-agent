@@ -100,6 +100,16 @@ mermaid.initialize({
       <li><a data-num="14" href="ch14-practice.html">动手与设计哲学</a></li>
     </ol>
   </div>
+
+  <div class="part">
+    <div class="part-label">Part VIII · 深度专题</div>
+    <ol class="chapters">
+      <li><a data-num="15" href="ch15-background.html">后台执行栈</a></li>
+      <li><a data-num="16" href="ch16-multi-agent.html">多 Agent 协作工程化</a></li>
+      <li><a data-num="17" href="ch17-ide-surfaces.html">IDE 集成与 PTY 桥</a></li>
+      <li><a data-num="18" href="ch18-mcp-internals.html">MCP 双向架构</a></li>
+    </ol>
+  </div>
 </nav>
 
 <main>
@@ -107,7 +117,7 @@ mermaid.initialize({
 <div class="hero">
   <h1>从 Hermes 学 Agent</h1>
   <p class="tagline">一本用 Hermes Agent 源码教你怎么造 Agent 的代码级教材。</p>
-  <div class="author">14 章 · 约 8 万字 · 面向 LLM 应用开发者</div>
+  <div class="author">18 章 · 约 14 万字 · 面向 LLM 应用开发者</div>
 </div>
 
 <p class="lead">
@@ -325,9 +335,51 @@ mermaid.initialize({
       <span class="num">14</span>
       <span class="title">
         <a href="ch14-practice.html">动手实践与设计哲学</a>
-        <span class="desc">从零写 Plugin / Skill；7 条带走的工程原则；推荐阅读路径</span>
+        <span class="desc">从零写 Plugin / Skill / MCP server；10 条带走的工程原则；推荐阅读路径</span>
       </span>
       <span class="pages">~30 min</span>
+    </li>
+  </ul>
+</div>
+
+<div class="toc-part">
+  <div class="part-banner">
+    <span class="part-num">PART VIII</span>
+    <span class="part-name">深度专题</span>
+    <span class="part-desc">高阶读者扩展</span>
+  </div>
+  <ul class="toc-list">
+    <li>
+      <span class="num">15</span>
+      <span class="title">
+        <a href="ch15-background.html">后台执行栈</a>
+        <span class="desc">Cron 调度 · Batch Runner · 轨迹压缩 · mini SWE-Bench 评测</span>
+      </span>
+      <span class="pages">~30 min</span>
+    </li>
+    <li>
+      <span class="num">16</span>
+      <span class="title">
+        <a href="ch16-multi-agent.html">多 Agent 协作的工程化</a>
+        <span class="desc">delegate_task 深剖 · Kanban SQLite WAL + CAS · 失败熔断 · 文件状态协调</span>
+      </span>
+      <span class="pages">~35 min</span>
+    </li>
+    <li>
+      <span class="num">17</span>
+      <span class="title">
+        <a href="ch17-ide-surfaces.html">IDE 集成与 PTY 桥</a>
+        <span class="desc">ACP · Ink TUI + tui_gateway · Dashboard PTY WebSocket</span>
+      </span>
+      <span class="pages">~30 min</span>
+    </li>
+    <li>
+      <span class="num">18</span>
+      <span class="title">
+        <a href="ch18-mcp-internals.html">MCP 双向架构</a>
+        <span class="desc">作为 host(消费) · 作为 server(暴露) · 子进程隔离 · 凭证脱敏 · 注入扫描</span>
+      </span>
+      <span class="pages">~35 min</span>
     </li>
   </ul>
 </div>

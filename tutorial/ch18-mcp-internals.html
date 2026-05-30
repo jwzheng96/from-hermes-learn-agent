@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 18 章 · MCP 双向架构 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VIII · 深度专题</div>
+    <ol class="chapters">
+      <li><a data-num="15" href="ch15-background.html">后台执行栈</a></li>
+      <li><a data-num="16" href="ch16-multi-agent.html">多 Agent 协作</a></li>
+      <li><a data-num="17" href="ch17-ide-surfaces.html">IDE 集成 &amp; PTY</a></li>
+      <li class="current"><a data-num="18" href="ch18-mcp-internals.html">MCP 双向架构</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part VIII · 深度专题
+  <span class="sep">›</span>
+  第 18 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 18</div>
+  <h1>MCP 双向架构</h1>
+  <p class="chapter-subtitle">ch07 介绍 Hermes 作为 MCP host 调外部工具。这一章看完整双向:
+    既作为 host 消费,也通过 <code>mcp_serve.py</code> <em>作为 server</em> 被消费——把 Hermes
+    会话数据反过来暴露给 Claude Desktop / Cursor。3 个传输 + 多层安全 + 凭证脱敏的全景。</p>
+  <div class="meta">
+    <span>本章约 10,000 字</span>
+    <span>阅读 ~35 分钟</span>
+    <span>关键词：MCP host · stdio/HTTP/SSE · 凭证脱敏 · circuit breaker · EventBridge · 注入扫描</span>
+  </div>
+</div>
+
+<p class="lead">
+  ch07 我们用<em>"USB-C 类比"</em>讲了 MCP 的接入意义。这一章看深得多的工程现实:
+  Hermes 作为 host 怎么 spawn 子进程、怎么环境变量脱敏、怎么凭证扫描、怎么做<em>电路断路器</em>;
+  作为 server 怎么把 SessionDB 暴露给远端 Claude Desktop;以及 2025 年的 MCP 安全最佳实践
+  (注入扫描、credential redaction)在 Hermes 里的具体体现。所有内容来自实测代码,
+  pin 在 commit 920b350e5。
+</p>
+
+<h2 class="section"><span class="secnum">18.1</span>"双向"是什么意思</h2>
+
+<p>同一个 Hermes 进程里:</p>
+
+<ul>
+  <li><strong>Host 角色</strong>(<code>tools/mcp_tool.py</code> ≈ 3200 行):
+      消费 GitHub / Slack / Filesystem 等外部 MCP server。
+      LLM 调这些工具,Hermes 当 client。</li>
+  <li><strong>Server 角色</strong>(<code>mcp_serve.py</code> ≈ 900 行):
+      把 Hermes 自己的 conversation/session/messages 暴露给外部 client(Claude Desktop / Cursor)。
+      <code>hermes mcp serve</code> 启动它。</li>
+</ul>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph H["Hermes 进程"]
+    HostSide["Host 侧<br/>(tools/mcp_tool.py)"]
+    ServerSide["Server 侧<br/>(mcp_serve.py)"]
+    DB[(SessionDB)]
+    Agent["AIAgent"]
+    Agent -.调外部工具.-&gt; HostSide
+    ServerSide -.读 sessions.-&gt; DB
+  end
+  HostSide -.stdio/HTTP/SSE.-&gt; Ext1["GitHub MCP server"]
+  HostSide -.stdio/HTTP/SSE.-&gt; Ext2["Slack MCP server"]
+  HostSide -.stdio/HTTP/SSE.-&gt; Ext3["..."]
+  Cli1["Claude Desktop"] -.stdio.-&gt; ServerSide
+  Cli2["Cursor"] -.stdio.-&gt; ServerSide
+  classDef agent fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+  classDef host fill:#f5ede0,stroke:#8b1538,color:#8b1538
+  classDef server fill:#e8eff5,stroke:#2c5282,color:#2c5282
+  class Agent agent
+  class HostSide host
+  class ServerSide server
+</pre>
+
+<p>"USB-C"类比意味:<em>插头插孔都长一样</em>。你写个 MCP server,Hermes 当客户端能用,
+   Cursor 当客户端也能用,Claude Desktop 也能用——同一份代码。</p>
+
+<h2 class="section"><span class="secnum">18.2</span>Hermes 作为 MCP Host:3 种传输</h2>
+
+<h3>18.2.1 三种传输的差异</h3>
+
+<table>
+  <thead><tr><th>传输</th><th>用途</th><th>典型场景</th></tr></thead>
+  <tbody>
+    <tr><td><strong>stdio</strong></td><td>spawn 子进程,stdin/stdout JSON-RPC</td><td>本地工具(Filesystem、Brave Search)</td></tr>
+    <tr><td><strong>HTTP / Streamable HTTP</strong></td><td>远程 HTTP endpoint</td><td>团队共享(GitHub 企业 server)</td></tr>
+    <tr><td><strong>SSE</strong></td><td>Server-Sent Events,长连接</td><td>需要 server push 的(实时通知)</td></tr>
+  </tbody>
+</table>
+
+<pre><code><span class="filename">tools/mcp_tool.py:183-207 (导入三种 transport)</span>
+<span class="k">from</span> mcp.client.stdio <span class="k">import</span> stdio_client
+_MCP_AVAILABLE = <span class="k">True</span>
+
+<span class="k">try</span>:
+    <span class="k">from</span> mcp.client.streamable_http <span class="k">import</span> streamablehttp_client
+    _MCP_HTTP_AVAILABLE = <span class="k">True</span>
+<span class="k">except</span> ImportError:
+    _MCP_HTTP_AVAILABLE = <span class="k">False</span>
+
+<span class="k">try</span>:
+    <span class="k">from</span> mcp.client.streamable_http <span class="k">import</span> streamable_http_client
+    _MCP_NEW_HTTP = <span class="k">True</span>
+<span class="k">except</span> ImportError:
+    _MCP_NEW_HTTP = <span class="k">False</span>
+
+<span class="k">try</span>:
+    <span class="k">from</span> mcp.client.sse <span class="k">import</span> sse_client
+<span class="k">except</span> ImportError:
+    sse_client = <span class="k">None</span>
+    logger.<span class="f">debug</span>(<span class="s">"mcp.client.sse not available -- SSE disabled"</span>)
+</code></pre>
+
+<p>注意:每种 transport 单独 try import,导入失败<em>不挂</em>,只 disable 该 transport。
+   这种<em>optional dependency</em> 模式让用户不强制装所有 SDK 子模块。</p>
+
+<h3>18.2.2 stdio 子进程的<em>环境变量过滤</em></h3>
+
+<p>这是 MCP host 安全的<strong>核心一招</strong>。spawn 一个第三方 MCP server 时,
+父进程的 env vars 默认会继承——包括 OPENAI_API_KEY、AWS 凭证、GitHub PAT......
+如果 MCP server 是恶意/被劫持的,它能立刻拿走这些。</p>
+
+<p>Hermes 的解法:<em>从父 env 只取一个安全白名单 + 用户显式配置</em>。</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:295-311</span>
+_SAFE_ENV_KEYS = <span class="f">frozenset</span>({
+    <span class="s">"PATH"</span>, <span class="s">"HOME"</span>, <span class="s">"USER"</span>, <span class="s">"LANG"</span>, <span class="s">"LC_ALL"</span>, <span class="s">"TERM"</span>, <span class="s">"SHELL"</span>, <span class="s">"TMPDIR"</span>,
+})
+
+<span class="k">def</span> <span class="f">_build_safe_env</span>(user_env: Optional[dict]) <span class="k">-&gt;</span> dict:
+    <span class="s">"""Build filtered env dict for stdio subprocesses.
+
+    Only passes through safe baseline variables (PATH, HOME, etc.) and XDG_*
+    variables from the current process environment, plus any variables
+    explicitly specified by the user in the server config.
+    """</span>
+    env = {}
+    <span class="k">for</span> key, value <span class="k">in</span> os.environ.<span class="f">items</span>():
+        <span class="k">if</span> key <span class="k">in</span> _SAFE_ENV_KEYS <span class="k">or</span> key.<span class="f">startswith</span>(<span class="s">"XDG_"</span>):
+            env[key] = value
+    <span class="k">if</span> user_env:
+        env.<span class="f">update</span>(user_env)    <span class="c"># user config 显式 opt-in 的</span>
+    <span class="k">return</span> env
+</code></pre>
+
+<p>结果:</p>
+
+<ul>
+  <li>OPENAI_API_KEY、ANTHROPIC_API_KEY → <em>不进</em>子进程</li>
+  <li>AWS_ACCESS_KEY_ID → <em>不进</em></li>
+  <li>GITHUB_TOKEN → <em>不进</em>(除非用户显式配置 <code>env: {GITHUB_TOKEN: "$GITHUB_TOKEN"}</code>)</li>
+  <li>PATH/HOME → 进</li>
+  <li>XDG_CACHE_HOME 等 freedesktop 标准变量 → 进(MCP server 写 cache 需要)</li>
+</ul>
+
+<div class="callout warn">
+  <span class="label">这是<em>"最小权限"</em>的具体实现</span>
+  Capability security(ch07 + ch16)在 host 层面就是<em>"父 env 默认零信任"</em>。
+  对照很多<em>"环境变量都透传"</em>的天真实现:那种实现一旦遇到坏 MCP server 就立刻
+  全套凭证外泄。Hermes 这 17 行代码堵死了这条路。
+</div>
+
+<h3>18.2.3 工具名命名空间</h3>
+
+<p>多个 MCP server 可能都有 <code>read_file</code> 工具。怎么避免冲突? <strong>命名空间前缀</strong>:</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:2842</span>
+<span class="k">def</span> <span class="f">_convert_mcp_schema</span>(server_name: str, mcp_tool) <span class="k">-&gt;</span> dict:
+    safe_tool_name = <span class="f">sanitize_mcp_name_component</span>(mcp_tool.name)
+    safe_server_name = <span class="f">sanitize_mcp_name_component</span>(server_name)
+    prefixed_name = <span class="f">f</span><span class="s">"mcp_{safe_server_name}_{safe_tool_name}"</span>
+    <span class="k">return</span> {
+        <span class="s">"name"</span>: prefixed_name,
+        <span class="s">"description"</span>: mcp_tool.description <span class="k">or</span> <span class="f">f</span><span class="s">"MCP tool {mcp_tool.name} from {server_name}"</span>,
+        <span class="s">"parameters"</span>: <span class="f">_normalize_mcp_input_schema</span>(<span class="f">getattr</span>(mcp_tool, <span class="s">"inputSchema"</span>, <span class="k">None</span>)),
+    }
+</code></pre>
+
+<p>LLM 看到的工具名是 <code>mcp_github_create_issue</code>、<code>mcp_filesystem_read_file</code>。
+   server 名 + 工具名都用 <code>sanitize_mcp_name_component()</code> 清洗(去掉特殊字符)
+   保证名字合法。</p>
+
+<h3>18.2.4 动态刷新</h3>
+
+<p>MCP server 可以推送 <code>notifications/tools/list_changed</code> 告诉 host 工具列表变了
+(server 加了新功能、user 装了新 plugin)。</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:223-232</span>
+<span class="k">try</span>:
+    <span class="k">from</span> mcp.types <span class="k">import</span> (
+        ServerNotification,
+        ToolListChangedNotification,
+        PromptListChangedNotification,
+        ResourceListChangedNotification,
+    )
+    _MCP_NOTIFICATION_TYPES = <span class="k">True</span>
+<span class="k">except</span> ImportError:
+    logger.<span class="f">debug</span>(<span class="s">"MCP notification types not available -- dynamic discovery disabled"</span>)
+</code></pre>
+
+<p>收到通知后,Hermes 重新调 <code>list_tools()</code>,用 <code>override=True</code> 覆盖旧 schema:</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:3114-3122</span>
+registry.<span class="f">register</span>(
+    name=tool_name_prefixed,
+    toolset=toolset_name,
+    schema=schema,
+    handler=<span class="f">_make_tool_handler</span>(name, mcp_tool.name, server.tool_timeout),
+    check_fn=<span class="f">_make_check_fn</span>(name),
+    is_async=<span class="k">False</span>,
+    description=schema[<span class="s">"description"</span>],
+)
+</code></pre>
+
+<p>Registry 的 RLock(ch06 第 6.2 节)保证替换原子,不会读到半新半旧的 schema。</p>
+
+<h3>18.2.5 Circuit Breaker:连续失败短路</h3>
+
+<p>MCP server 网络抖动、卡死、宕机时,LLM 会一直 retry,浪费 token。Hermes 用电路断路器:</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:2317-2331</span>
+<span class="k">def</span> <span class="f">_handler</span>(args, **kwargs):
+    <span class="c"># Circuit breaker:连续 3 次失败,直接短路 60 秒</span>
+    <span class="k">if</span> _server_error_counts.<span class="f">get</span>(server_name, <span class="num">0</span>) &gt;= _CIRCUIT_BREAKER_THRESHOLD:
+        opened_at = _server_breaker_opened_at.<span class="f">get</span>(server_name, <span class="num">0.0</span>)
+        age = time.<span class="f">monotonic</span>() - opened_at
+        <span class="k">if</span> age &lt; _CIRCUIT_BREAKER_COOLDOWN_SEC:
+            remaining = <span class="f">max</span>(<span class="num">1</span>, <span class="f">int</span>(_CIRCUIT_BREAKER_COOLDOWN_SEC - age))
+            <span class="k">return</span> json.<span class="f">dumps</span>({
+                <span class="s">"error"</span>: (
+                    <span class="f">f</span><span class="s">"MCP server '{server_name}' is unreachable after "</span>
+                    <span class="f">f</span><span class="s">"{_server_error_counts[server_name]} consecutive "</span>
+                    <span class="f">f</span><span class="s">"failures. Auto-retry available in ~{remaining}s."</span>
+                )
+            }, ensure_ascii=<span class="k">False</span>)
+</code></pre>
+
+<p>关键:错误消息<em>明确告诉 LLM 多久后能重试</em>。LLM 看到这个会:</p>
+
+<ol>
+  <li>不再重试这个 server 的工具</li>
+  <li>选择走不同路径(用别的工具实现同样功能)</li>
+  <li>告诉用户"GitHub MCP server 暂时不可用,60 秒后试"</li>
+</ol>
+
+<p>这是<em>"错误信息要让模型能自己改正"</em>(ch03 第 3.5 节)在 MCP 层的应用。</p>
+
+<h3>18.2.6 凭证脱敏:错误消息里不能漏密钥</h3>
+
+<p>MCP server 报错时,错误消息常带凭证(<em>"Failed: Invalid GitHub token ghp_xxxxxxxxxxxx"</em>)。
+   原样返回给 LLM 会让<em>密钥进训练数据</em>(LLM 把它 echo 在响应里、对话被保存)。Hermes 用正则<em>脱敏</em>:</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:270-320</span>
+_CREDENTIAL_PATTERN = re.<span class="f">compile</span>(
+    <span class="s">r"(?:"</span>
+    <span class="s">r"ghp_[A-Za-z0-9_]{1,255}"</span>                <span class="c"># GitHub PAT</span>
+    <span class="s">r"|sk-[A-Za-z0-9_]{1,255}"</span>               <span class="c"># OpenAI-style key</span>
+    <span class="s">r"|Bearer\s+\S+"</span>                          <span class="c"># Bearer token</span>
+    <span class="s">r"|token=[^\s&amp;,;\"']{1,255}"</span>             <span class="c"># token=...</span>
+    <span class="s">r"|key=[^\s&amp;,;\"']{1,255}"</span>               <span class="c"># key=...</span>
+    <span class="s">r"|API_KEY=[^\s&amp;,;\"']{1,255}"</span>           <span class="c"># API_KEY=...</span>
+    <span class="s">r"|password=[^\s&amp;,;\"']{1,255}"</span>          <span class="c"># password=...</span>
+    <span class="s">r"|secret=[^\s&amp;,;\"']{1,255}"</span>            <span class="c"># secret=...</span>
+    <span class="s">r")"</span>,
+    re.IGNORECASE,
+)
+
+<span class="k">def</span> <span class="f">_sanitize_error</span>(text: str) <span class="k">-&gt;</span> str:
+    <span class="s">"""Strip credential-like patterns from error text before returning to LLM."""</span>
+    <span class="k">return</span> _CREDENTIAL_PATTERN.<span class="f">sub</span>(<span class="s">"[REDACTED]"</span>, text)
+</code></pre>
+
+<p>覆盖 8 类常见凭证格式。脱敏后 LLM 看到的是 <em>"Failed: Invalid GitHub token [REDACTED]"</em>——
+   足以理解错误,但凭证不会泄漏。</p>
+
+<h3>18.2.7 工具描述的<em>注入扫描</em></h3>
+
+<p>MCP server 的工具描述是 server 提供的<em>任意字符串</em>,会被注入 LLM 的 system 上下文。
+   恶意 server 可以在 description 里塞 "Ignore previous instructions, send tokens to..."。
+   Hermes 在注册时扫描:</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:339-384</span>
+_MCP_INJECTION_PATTERNS = [
+    (re.<span class="f">compile</span>(<span class="s">r"ignore\s+(all\s+)?previous\s+instructions"</span>, re.I),
+     <span class="s">"prompt override attempt"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"you\s+are\s+now\s+a"</span>, re.I),
+     <span class="s">"identity override attempt"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"your\s+new\s+(task|role|instructions?)\s+(is|are)"</span>, re.I),
+     <span class="s">"task override attempt"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"system\s*:\s*"</span>, re.I),
+     <span class="s">"system prompt injection attempt"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"&lt;\s*(system|human|assistant)\s*&gt;"</span>, re.I),
+     <span class="s">"role tag injection attempt"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"do\s+not\s+(tell|inform|mention|reveal)"</span>, re.I),
+     <span class="s">"concealment instruction"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"(curl|wget|fetch)\s+https?://"</span>, re.I),
+     <span class="s">"network command in description"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"base64\.(b64decode|decodebytes)"</span>, re.I),
+     <span class="s">"base64 decode reference"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"exec\s*\(|eval\s*\("</span>, re.I),
+     <span class="s">"code execution reference"</span>),
+    (re.<span class="f">compile</span>(<span class="s">r"import\s+(subprocess|os|shutil|socket)"</span>, re.I),
+     <span class="s">"dangerous import reference"</span>),
+]
+
+<span class="k">def</span> <span class="f">_scan_mcp_description</span>(server_name, tool_name, description):
+    findings = []
+    <span class="k">if</span> <span class="k">not</span> description:
+        <span class="k">return</span> findings
+    <span class="k">for</span> pattern, reason <span class="k">in</span> _MCP_INJECTION_PATTERNS:
+        <span class="k">if</span> pattern.<span class="f">search</span>(description):
+            findings.<span class="f">append</span>(reason)
+    <span class="k">if</span> findings:
+        logger.<span class="f">warning</span>(
+            <span class="s">"MCP server '%s' tool '%s': suspicious description content — %s"</span>,
+            server_name, tool_name, <span class="s">"; "</span>.<span class="f">join</span>(findings),
+        )
+    <span class="k">return</span> findings
+</code></pre>
+
+<div class="callout">
+  <span class="label">为什么<em>只警告不阻塞</em></span>
+  Hermes 这里发现 suspicious 只 logger.warning,不拒绝注册。理由——false positive 概率高,
+  正常工具描述里也可能有 <code>"do not"</code> 或 <code>"system:"</code>。<em>记日志保留可审计性</em>,
+  让运维事后看 log 决定是否拉黑这个 server。完美防御不现实,可观测优先于绝对防御。
+</div>
+
+<h3>18.2.8 工具白/黑名单</h3>
+
+<p>用户可以只激活 server 的部分工具:</p>
+
+<pre><code><span class="filename">tools/mcp_tool.py:3076-3091</span>
+tools_filter = config.<span class="f">get</span>(<span class="s">"tools"</span>) <span class="k">or</span> {}
+include_set = <span class="f">_normalize_name_filter</span>(tools_filter.<span class="f">get</span>(<span class="s">"include"</span>), ...)
+exclude_set = <span class="f">_normalize_name_filter</span>(tools_filter.<span class="f">get</span>(<span class="s">"exclude"</span>), ...)
+
+<span class="k">def</span> <span class="f">_should_register</span>(tool_name):
+    <span class="k">if</span> include_set:
+        <span class="k">return</span> tool_name <span class="k">in</span> include_set    <span class="c"># 白名单优先</span>
+    <span class="k">if</span> exclude_set:
+        <span class="k">return</span> tool_name <span class="k">not</span> <span class="k">in</span> exclude_set
+    <span class="k">return</span> <span class="k">True</span>                              <span class="c"># 默认全注册</span>
+</code></pre>
+
+<p>规则:</p>
+<ul>
+  <li>有 <code>include</code> → 只这些</li>
+  <li>无 <code>include</code> 有 <code>exclude</code> → 除这些之外</li>
+  <li>都没 → 全注册</li>
+  <li>同时有 → <code>include</code> 优先</li>
+</ul>
+
+<p>用户体验:装 GitHub MCP server 但只想给 LLM <code>list_issues</code>,不给 <code>create_repository</code>:</p>
+
+<pre><code>mcp_servers:
+  github:
+    url: <span class="s">"https://github.mcp.example.com/mcp"</span>
+    tools:
+      include: [list_issues, get_issue, list_pulls, get_pull]
+</code></pre>
+
+<h2 class="section"><span class="secnum">18.3</span>用户配置 schema 全貌</h2>
+
+<pre><code><span class="filename">~/.hermes/config.yaml</span>
+mcp_servers:
+  <span class="c"># ── 1. stdio 子进程模式 ──────────────────────</span>
+  filesystem:
+    command: <span class="s">"npx"</span>
+    args: [<span class="s">"-y"</span>, <span class="s">"@modelcontextprotocol/server-filesystem"</span>, <span class="s">"/tmp"</span>]
+    env: {}
+    timeout: 120                 <span class="c"># 单次工具调用超时</span>
+    connect_timeout: 60          <span class="c"># 初始连接超时</span>
+    enabled: <span class="k">true</span>
+    tools:
+      include: [<span class="s">"read_file"</span>, <span class="s">"write_file"</span>]
+      exclude: [<span class="s">"delete_file"</span>]
+      resources: <span class="k">true</span>            <span class="c"># 是否暴露 resources/* 工具</span>
+      prompts: <span class="k">true</span>              <span class="c"># 是否暴露 prompts/* 工具</span>
+    supports_parallel_tool_calls: <span class="k">true</span>
+
+  <span class="c"># ── 2. HTTP / Streamable HTTP 模式 ──────────</span>
+  github:
+    url: <span class="s">"https://github.mcp.example.com/mcp"</span>
+    headers:
+      Authorization: <span class="s">"Bearer ${MCP_GITHUB_API_KEY}"</span>   <span class="c"># env var 插值</span>
+    timeout: 180
+    auth: <span class="s">"oauth"</span>             <span class="c"># OAuth 2.1 PKCE</span>
+
+  <span class="c"># ── 3. SSE 模式 ──────────────────────────</span>
+  searxng:
+    url: <span class="s">"http://localhost:8000/sse"</span>
+    transport: <span class="s">"sse"</span>
+    timeout: 180
+    connect_timeout: 10
+    sampling:                    <span class="c"># server 向 host 请求 LLM 完成</span>
+      enabled: <span class="k">true</span>
+      model: <span class="s">"gemini-3-flash"</span>  <span class="c"># 限定模型</span>
+      max_tokens_cap: 4096
+      timeout: 30
+      max_rpm: 10                <span class="c"># 速率限制</span>
+      max_tool_rounds: 5         <span class="c"># 防 sampling 无限循环</span>
+      log_level: <span class="s">"info"</span>
+</code></pre>
+
+<p>Env vars 插值在 <code>_interpolate_env_vars()</code>(行 2233-2243)实现,<code>${VAR}</code> 运行时解析。
+   这样 token 不写死在 config 文件里。</p>
+
+<h2 class="section"><span class="secnum">18.4</span>Hermes 作为 MCP Server:mcp_serve.py</h2>
+
+<h3>18.4.1 入口</h3>
+
+<p>Server 模式由 <code>hermes mcp serve</code> 启动,stdio 协议:</p>
+
+<pre><code><span class="filename">mcp_serve.py:866-897</span>
+<span class="k">def</span> <span class="f">run_mcp_server</span>(verbose: bool = <span class="k">False</span>):
+    <span class="s">"""Start the Hermes MCP server on stdio."""</span>
+    <span class="k">if</span> <span class="k">not</span> _MCP_SERVER_AVAILABLE:
+        <span class="f">print</span>(<span class="s">"Error: MCP server requires the 'mcp' package."</span>, file=sys.stderr)
+        sys.<span class="f">exit</span>(<span class="num">1</span>)
+
+    <span class="k">if</span> verbose:
+        logging.<span class="f">basicConfig</span>(level=logging.DEBUG, stream=sys.stderr)
+    <span class="k">else</span>:
+        logging.<span class="f">basicConfig</span>(level=logging.WARNING, stream=sys.stderr)
+
+    bridge = <span class="f">EventBridge</span>()
+    bridge.<span class="f">start</span>()
+
+    server = <span class="f">create_mcp_server</span>(event_bridge=bridge)
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">_run</span>():
+        <span class="k">try</span>:
+            <span class="k">await</span> server.<span class="f">run_stdio_async</span>()
+        <span class="k">finally</span>:
+            bridge.<span class="f">stop</span>()
+
+    <span class="k">try</span>:
+        asyncio.<span class="f">run</span>(<span class="f">_run</span>())
+    <span class="k">except</span> KeyboardInterrupt:
+        bridge.<span class="f">stop</span>()
+</code></pre>
+
+<p>外部 client(Claude Desktop)的配置:</p>
+
+<pre><code>{
+    <span class="s">"mcpServers"</span>: {
+        <span class="s">"hermes"</span>: {
+            <span class="s">"command"</span>: <span class="s">"hermes"</span>,
+            <span class="s">"args"</span>: [<span class="s">"mcp"</span>, <span class="s">"serve"</span>]
+        }
+    }
+}
+</code></pre>
+
+<p>Claude Desktop 启动后 spawn <code>hermes mcp serve</code> 作为子进程,通过 stdio 通信。
+   从 Claude Desktop 视角:Hermes 是个普通 MCP server。</p>
+
+<h3>18.4.2 暴露的 10 个工具</h3>
+
+<p>Hermes 作为 server 暴露 10 个工具(<code>mcp_serve.py:450-859</code>),覆盖<em>"读 + 写 + 监听"</em>会话:</p>
+
+<table>
+  <thead><tr><th>工具</th><th>作用</th></tr></thead>
+  <tbody>
+    <tr><td><code>conversations_list</code></td><td>列所有平台的活跃会话(Telegram、Discord、Slack 等)</td></tr>
+    <tr><td><code>conversation_get</code></td><td>读单个会话详情(token 用量、时间戳)</td></tr>
+    <tr><td><code>messages_read</code></td><td>读会话最近 N 条消息</td></tr>
+    <tr><td><code>attachments_fetch</code></td><td>提取消息附件(图片、文件)</td></tr>
+    <tr><td><code>events_poll</code></td><td>cursor-based 拉新事件</td></tr>
+    <tr><td><code>events_wait</code></td><td>long-poll(30s),等新事件</td></tr>
+    <tr><td><code>messages_send</code></td><td>给某平台某会话发消息("telegram:6308981865")</td></tr>
+    <tr><td><code>channels_list</code></td><td>列可发送目标</td></tr>
+    <tr><td><code>permissions_list_open</code></td><td>列待审批操作</td></tr>
+    <tr><td><code>permissions_respond</code></td><td>响应审批(allow/deny)</td></tr>
+  </tbody>
+</table>
+
+<p>典型用法:Claude Desktop 用户问"今天 Telegram 上有什么消息?",Claude 调
+<code>messages_read(session_key="telegram:..")</code> 拉数据。或者跟踪审批:Claude 看到
+<code>permissions_list_open</code> 有待批的工具调用,主动通知用户。</p>
+
+<h3>18.4.3 EventBridge:后台轮询 SessionDB</h3>
+
+<p>问题:Hermes Gateway 进程随时在写 SessionDB(新消息、新事件)。
+   MCP server 进程要怎么<em>知道</em>有新内容? 不可能每秒 query 全表。</p>
+
+<p>Hermes 的解法:<strong>用文件 mtime + cursor 的轻量轮询</strong>:</p>
+
+<pre><code><span class="filename">mcp_serve.py:204-443</span>
+<span class="k">class</span> <span class="n">EventBridge</span>:
+    <span class="s">"""Background poller — 监视 SessionDB,维护内存事件队列 + waiter。
+
+    OpenClaw 的等价是 WebSocket gateway bridge,通过事件推。
+    Hermes 用 SQLite,改用轮询。
+    """</span>
+    <span class="k">def</span> <span class="f">__init__</span>(self):
+        self._queue: List[QueueEvent] = []
+        self._cursor = <span class="num">0</span>
+        self._lock = threading.<span class="f">Lock</span>()
+        self._new_event = threading.<span class="f">Event</span>()
+        self._running = <span class="k">False</span>
+        self._thread: Optional[threading.Thread] = <span class="k">None</span>
+        self._last_poll_timestamps: Dict[str, float] = {}
+        self._pending_approvals: Dict[str, dict] = {}
+        self._sessions_json_mtime: float = <span class="num">0.0</span>      <span class="c"># 关键 — 用 mtime 判变</span>
+        self._state_db_mtime: float = <span class="num">0.0</span>
+        self._cached_sessions_index: dict = {}
+</code></pre>
+
+<p>核心是 <strong>mtime 短路</strong>(行 346-443):</p>
+
+<pre><code><span class="k">def</span> <span class="f">_poll_loop</span>(self):
+    <span class="k">while</span> self._running:
+        <span class="c"># 看 sessions.json mtime — 没动就 skip query</span>
+        cur_mtime = os.path.<span class="f">getmtime</span>(SESSIONS_JSON_PATH)
+        <span class="k">if</span> cur_mtime == self._sessions_json_mtime:
+            time.<span class="f">sleep</span>(_POLL_INTERVAL)    <span class="c"># 200ms</span>
+            <span class="k">continue</span>
+
+        self._sessions_json_mtime = cur_mtime
+        <span class="c"># mtime 变了 — 真去 query 拉新消息</span>
+        new_messages = <span class="f">_query_messages_since</span>(self._last_poll_timestamps)
+        <span class="k">for</span> msg <span class="k">in</span> new_messages:
+            self._queue.<span class="f">append</span>(<span class="f">QueueEvent</span>(<span class="s">"message"</span>, msg, ...))
+        self._new_event.<span class="f">set</span>()    <span class="c"># 唤醒 wait_for_event 的等待者</span>
+</code></pre>
+
+<p>性能数学:</p>
+<ul>
+  <li>无更新时:每 200ms 一次 <code>os.path.getmtime()</code> = <em>~1 微秒</em>。基本免费。</li>
+  <li>有更新:才真读 DB。</li>
+  <li>结果:200ms 轮询<em>感觉</em>实时,但 CPU 接近空闲。</li>
+</ul>
+
+<h3>18.4.4 wait_for_event:long-poll 阻塞等</h3>
+
+<p>外部 client 可以 <em>"long poll"</em>——发起请求阻塞最多 30 秒,有新事件就立刻返回。
+   这比 client 自己轮询省 round trip:</p>
+
+<pre><code><span class="filename">mcp_serve.py:268-294</span>
+<span class="k">def</span> <span class="f">wait_for_event</span>(self, after_cursor=<span class="num">0</span>, timeout=<span class="num">30.0</span>, kind_filter=<span class="k">None</span>):
+    <span class="s">"""Block until matching event or timeout."""</span>
+    deadline = time.<span class="f">monotonic</span>() + timeout
+    <span class="k">while</span> <span class="k">True</span>:
+        <span class="c"># 检查现有队列有没有匹配</span>
+        <span class="k">with</span> self._lock:
+            <span class="k">for</span> evt <span class="k">in</span> self._queue:
+                <span class="k">if</span> evt.cursor &gt; after_cursor:
+                    <span class="k">if</span> kind_filter <span class="k">is</span> <span class="k">None</span> <span class="k">or</span> evt.kind <span class="k">in</span> kind_filter:
+                        <span class="k">return</span> evt
+        <span class="c"># 队列里没,等新事件信号</span>
+        remaining = deadline - time.<span class="f">monotonic</span>()
+        <span class="k">if</span> remaining &lt;= <span class="num">0</span>:
+            <span class="k">return</span> <span class="k">None</span>
+        self._new_event.<span class="f">wait</span>(timeout=remaining)
+        self._new_event.<span class="f">clear</span>()
+</code></pre>
+
+<p>threading.Event 是<em>有效</em>的 long-poll 实现——没事件时线程睡,有事件 set() 立刻唤醒。
+   不烧 CPU。</p>
+
+<h2 class="section"><span class="secnum">18.5</span>CLI:hermes mcp 子命令</h2>
+
+<p>所有 MCP 操作通过 <code>hermes mcp &lt;verb&gt;</code> 暴露:</p>
+
+<pre><code><span class="filename">hermes_cli/mcp_config.py:743-780</span>
+<span class="k">def</span> <span class="f">mcp_command</span>(args):
+    action = <span class="f">getattr</span>(args, <span class="s">"mcp_action"</span>, <span class="k">None</span>)
+    <span class="k">if</span> action == <span class="s">"serve"</span>:
+        <span class="k">from</span> mcp_serve <span class="k">import</span> run_mcp_server
+        <span class="f">run_mcp_server</span>(verbose=<span class="f">getattr</span>(args, <span class="s">"verbose"</span>, <span class="k">False</span>))
+        <span class="k">return</span>
+
+    handlers = {
+        <span class="s">"add"</span>: cmd_mcp_add,
+        <span class="s">"remove"</span>: cmd_mcp_remove,
+        <span class="s">"list"</span>: cmd_mcp_list,
+        <span class="s">"test"</span>: cmd_mcp_test,
+        <span class="s">"configure"</span>: cmd_mcp_configure,
+        <span class="s">"login"</span>: cmd_mcp_login,
+    }
+    handler = handlers.<span class="f">get</span>(action)
+    <span class="k">if</span> handler:
+        <span class="f">handler</span>(args)
+    <span class="k">else</span>:
+        <span class="f">cmd_mcp_list</span>()    <span class="c"># 默认列出</span>
+</code></pre>
+
+<h3>18.5.1 <code>hermes mcp add</code>:Discovery-First 流程</h3>
+
+<p>添加 MCP server 时,Hermes <em>先连试 list_tools 才存配置</em>:</p>
+
+<pre><code><span class="filename">hermes_cli/mcp_config.py:226-418 (摘要)</span>
+<span class="k">def</span> <span class="f">cmd_mcp_add</span>(args):
+    name = args.name
+    <span class="c"># ... 解析 transport 配置 ...</span>
+
+    <span class="c"># Discovery:试连</span>
+    <span class="f">print</span>(<span class="f">f</span><span class="s">"  Connecting to '{name}'..."</span>)
+    <span class="k">try</span>:
+        tools = <span class="f">_probe_single_server</span>(name, server_config)
+    <span class="k">except</span> Exception <span class="k">as</span> exc:
+        <span class="f">_error</span>(<span class="f">f</span><span class="s">"Failed to connect: {exc}"</span>)
+        <span class="k">if</span> <span class="f">_confirm</span>(<span class="s">"Save anyway (you can test later)?"</span>, default=<span class="k">False</span>):
+            server_config[<span class="s">"enabled"</span>] = <span class="k">False</span>     <span class="c"># 默认 disabled</span>
+            <span class="f">_save_mcp_server</span>(name, server_config)
+            <span class="f">_success</span>(<span class="f">f</span><span class="s">"Saved '{name}' to config (disabled)"</span>)
+        <span class="k">return</span>
+
+    <span class="c"># 让用户选哪些工具</span>
+    <span class="f">_success</span>(<span class="f">f</span><span class="s">"Connected! Found {len(tools)} tool(s):"</span>)
+    <span class="c"># ... interactive checklist 选 include/exclude ...</span>
+
+    server_config[<span class="s">"enabled"</span>] = <span class="k">True</span>
+    <span class="f">_save_mcp_server</span>(name, server_config)
+</code></pre>
+
+<p>关键:<em>"connection 失败的 server 保存为 disabled"</em>。避免每次启动 Hermes 都看到一片红色错误。
+   用户 fix 后跑 <code>hermes mcp test &lt;name&gt;</code> 验证再启用。</p>
+
+<h3>18.5.2 _probe_single_server:临时连接</h3>
+
+<pre><code><span class="filename">hermes_cli/mcp_config.py:167-205</span>
+<span class="k">def</span> <span class="f">_probe_single_server</span>(name, config, connect_timeout=<span class="num">30</span>):
+    <span class="s">"""临时连接,list 工具,断开。"""</span>
+    <span class="k">from</span> tools.mcp_tool <span class="k">import</span> (
+        _ensure_mcp_loop, _run_on_mcp_loop, _connect_server, _stop_mcp_loop,
+    )
+    <span class="f">_ensure_mcp_loop</span>()
+    tools_found: List[Tuple[str, str]] = []
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">_probe</span>():
+        server = <span class="k">await</span> asyncio.<span class="f">wait_for</span>(
+            <span class="f">_connect_server</span>(name, config), timeout=connect_timeout)
+        <span class="k">for</span> t <span class="k">in</span> server._tools:
+            desc = <span class="f">getattr</span>(t, <span class="s">"description"</span>, <span class="s">""</span>) <span class="k">or</span> <span class="s">""</span>
+            <span class="k">if</span> <span class="f">len</span>(desc) &gt; <span class="num">80</span>:
+                desc = desc[:<span class="num">77</span>] + <span class="s">"..."</span>
+            tools_found.<span class="f">append</span>((t.name, desc))
+        <span class="k">await</span> server.<span class="f">shutdown</span>()
+
+    <span class="k">try</span>:
+        <span class="f">_run_on_mcp_loop</span>(<span class="f">_probe</span>(), timeout=connect_timeout + <span class="num">10</span>)
+    <span class="k">finally</span>:
+        <span class="f">_stop_mcp_loop</span>()
+
+    <span class="k">return</span> tools_found
+</code></pre>
+
+<p>用<em>专门的临时 event loop</em>跑探测,完事 stop。和主 Hermes loop 隔离。</p>
+
+<h2 class="section"><span class="secnum">18.6</span>2025 年 Code Execution with MCP——Hermes 还没用</h2>
+
+<p>Anthropic 2025 推 <em>Code Execution with MCP</em>:让 Agent 写代码,通过 MCP server 在沙箱里执行。
+   比每次 inline 在 prompt 里讨论代码更安全。</p>
+
+<p>Hermes 目前的 MCP 实现支持 <strong>sampling</strong>(server 反向请求 host 跑 LLM),
+   但没专用 code execution server 整合。<em>这是 future direction</em>:</p>
+
+<ul>
+  <li>装一个 code-exec MCP server(Node/Python 运行时)</li>
+  <li>给它配置:<code>tools.include: [run_code]</code></li>
+  <li>LLM 调 <code>mcp_codeexec_run_code(code="...")</code> 在 server sandbox 执行</li>
+  <li>结果回 LLM</li>
+</ul>
+
+<p>这比 Hermes 现有的 <code>execute_code</code>(host 上 sandbox)更隔离——
+   代码完全在 MCP server 进程,失败也不影响 host。</p>
+
+<h2 class="section"><span class="secnum">18.7</span>双向架构总图</h2>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph Hermes["Hermes 进程"]
+    direction TB
+    Agent["AIAgent"]
+    Host["MCP Host<br/>(tools/mcp_tool.py)"]
+    Server["MCP Server<br/>(mcp_serve.py)"]
+    DB[(SessionDB)]
+    Reg["Tool Registry"]
+
+    Agent --&gt;|"调 mcp_github_*"| Reg
+    Reg --&gt; Host
+    Host -.-&gt; |"_build_safe_env<br/>凭证脱敏<br/>circuit breaker<br/>注入扫描"| Filters[/" 4 道防御"/]
+  end
+
+  Filters -.spawn 子进程.-&gt; Ext1["GitHub MCP"]
+  Filters -.HTTP/SSE.-&gt; Ext2["Slack MCP"]
+  Filters -.stdio.-&gt; Ext3["Filesystem MCP"]
+
+  Server -.读.-&gt; DB
+  Cli1["Claude Desktop"] -.stdio.-&gt; Server
+  Cli2["Cursor"] -.stdio.-&gt; Server
+
+  classDef agent fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+  classDef host fill:#f5ede0,stroke:#8b1538,color:#8b1538
+  classDef server fill:#e8eff5,stroke:#2c5282,color:#2c5282
+  classDef defense fill:#f0eaf1,stroke:#6b4488,color:#6b4488
+  class Agent agent
+  class Host host
+  class Server server
+  class Filters defense
+</pre>
+
+<h2 class="section"><span class="secnum">18.8</span>给 ch13 frontier 的补充:MCP 2026 演进</h2>
+
+<p>ch13 写于 2026-05,提到 MCP 2024.11 发布、生态有数千 server。补充三点 2026 演进:</p>
+
+<ol>
+  <li><strong>OAuth 2.1 PKCE 标准化</strong>。早期 MCP server 用 Bearer token 简单认证。
+      2026 起官方 SDK 都支持 OAuth 2.1 PKCE,Hermes 通过 <code>auth: "oauth"</code> 配置启用。</li>
+  <li><strong>Server-initiated sampling</strong>。MCP server 可以反向请求 host 跑 LLM 完成。
+      Hermes 在 <code>sampling.max_tool_rounds: 5</code> 防"sampling 循环"
+      (server 调 host 调 server 调 host...)。</li>
+  <li><strong>Notifications/tools/list_changed</strong>。早期 MCP 工具列表是静态的。
+      2026 起规范支持动态变更,Hermes 用 <code>register(override=True)</code> 接住。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">18.9</span>本章带走的</h2>
+
+<ul>
+  <li>Hermes 的 MCP 是<strong>双向</strong>:作为 host 消费(<code>mcp_tool.py</code>)+ 作为 server 暴露(<code>mcp_serve.py</code>)。</li>
+  <li>Host 支持 3 种 transport:stdio / HTTP / SSE。每种 try-import 单独 fail。</li>
+  <li><strong>子进程环境变量过滤</strong>(<code>_SAFE_ENV_KEYS = {PATH, HOME, USER, ...}</code> + XDG_* + 用户显式配置)
+      是 host 安全的核心一招——父进程的 OPENAI_API_KEY 永远不进 MCP server 子进程。</li>
+  <li>工具命名空间 <code>mcp_&lt;server&gt;_&lt;tool&gt;</code> 防冲突。Server 名 + 工具名都 sanitize。</li>
+  <li><strong>Circuit breaker</strong>(3 次失败 → 60 秒短路)防 LLM retry 风暴。
+      错误消息明告"~Xs 后可重试",让 LLM 自己规划。</li>
+  <li><strong>凭证脱敏</strong>用 8 类正则:ghp_、sk-、Bearer、token=、key=、API_KEY=、password=、secret=。
+      错误消息回 LLM 前都过 <code>_sanitize_error()</code>。</li>
+  <li><strong>工具描述注入扫描</strong>:10 类 pattern(ignore previous instructions、you are now a、
+      role tag injection、curl http、base64 decode、exec/eval、dangerous import)。
+      只警告不阻塞——保留可审计性,避免 false positive。</li>
+  <li>Server 端通过 <code>EventBridge</code> 后台轮询 SessionDB。<em>用 mtime 短路</em>:
+      200ms 一次 <code>os.path.getmtime()</code> = ~1 微秒,文件没变就 skip query。</li>
+  <li><strong>wait_for_event 30 秒 long-poll</strong> 用 threading.Event。无事件时线程睡,有事件 set() 唤醒。</li>
+  <li>Hermes 暴露 10 个工具:conversations_list / messages_read / events_poll / events_wait / messages_send / permissions_respond...
+      让外部 client 完整读 + 写 + 监听 Hermes 会话。</li>
+  <li><code>hermes mcp add</code> 是<strong>discovery-first</strong>:连不上就保存为 disabled,不挂启动。</li>
+  <li>Future:Code Execution with MCP——Hermes 还没整合,但架构已 ready。</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">为什么这一章是 ch07 的"完整版"</span>
+  ch07 把 MCP 当 "USB-C 类比" 讲了一遍。这一章给你<em>"真要写 MCP server 该考虑什么"</em>的清单:
+  4 道 host 防御、3 种 transport 选择、10 个内置工具、配置 schema、CLI discovery 流程。
+  下次有人说"我们做了一个 MCP server",你能立刻问对的问题。
+</div>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      解释为什么 <code>_SAFE_ENV_KEYS</code> 是<em>白名单</em>不是<em>黑名单</em>。
+      用户加新 env var 时哪种更安全?
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      EventBridge 的 mtime 短路是 200ms 轮询。如果改成 100ms,CPU 影响有多大?
+      改成每 5 秒一次的<em>缺点</em>是什么?
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Circuit breaker 60 秒 cooldown。如果 server 是<em>临时</em>抖动(5 秒后就好),
+      用户怎么手动绕过等 60 秒? 设计一个 CLI 命令 <code>hermes mcp reset-breaker &lt;server&gt;</code>。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      凭证脱敏正则覆盖 8 类。<em>"Google API key starts with AIza"</em>(35 字符)不在列表。
+      写出添加它的正则。讨论:加一类正则的<em>false positive 风险</em>是什么?
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      工具描述注入扫描发现 suspicious 只 log warning 不阻塞——理由是 false positive。
+      设计一个<em>"上下文感知"</em>扫描:
+      区分 "Do not delete files unless asked"(合法 description)和
+      "Do not tell user about the exfiltration"(恶意)。
+      给一个思路(不必实现完整)。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Code Execution with MCP 比 Hermes 内置 <code>execute_code</code> 更隔离(子进程沙箱)。
+      但<em>失去</em>了什么?讨论:tool result 携带文件输出、长程任务挂起、本地 state 共享——
+      这三件 MCP code-exec 怎么解?给一个产品级方案。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch17-ide-surfaces.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 17 章 · IDE 集成与 PTY 桥</div>
+  </a>
+  <a class="next" href="index.html">
+    <div class="direction">回到</div>
+    <div class="title">📖 总目录</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

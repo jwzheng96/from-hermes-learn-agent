@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 15 章 · 后台执行栈 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VIII · 深度专题</div>
+    <ol class="chapters">
+      <li class="current"><a data-num="15" href="ch15-background.html">后台执行栈</a></li>
+      <li><a data-num="16" href="ch16-multi-agent.html">多 Agent 协作</a></li>
+      <li><a data-num="17" href="ch17-ide-surfaces.html">IDE 集成 &amp; PTY</a></li>
+      <li><a data-num="18" href="ch18-mcp-internals.html">MCP 双向架构</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part VIII · 深度专题
+  <span class="sep">›</span>
+  第 15 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 15</div>
+  <h1>后台执行栈</h1>
+  <p class="chapter-subtitle">Agent 不只是"等用户问话再答"。Cron 调度、批量轨迹生成、压缩、SWE 评测——
+    这一章是 Hermes 里"用户看不见但产业用得最重"的子系统。</p>
+  <div class="meta">
+    <span>本章约 9,500 字</span>
+    <span>阅读 ~30 分钟</span>
+    <span>关键词：cron · catchup window · inactivity timeout · batch trajectory · compression</span>
+  </div>
+</div>
+
+<p class="lead">
+  前 14 章看的都是<em>"用户输入 → Agent 答"</em>的同步流程。但生产 Agent 里有一大半工作不在这条路上:
+  夜里自动跑数据 + 推送报告;白天并发跑几百个 prompt 生成训练轨迹;跑完后压缩到能塞进 SFT;
+  从开源仓库挑 SWE-Bench 任务做评测。
+  这一章拆 Hermes 的 5 个后台子系统:Cron、cronjob 工具、Batch Runner、Trajectory Compressor、Mini SWE Runner。
+  代码量加起来 7600 行——但每一行都解决一个"夜里没人盯着也得稳"的工程问题。
+</p>
+
+<h2 class="section"><span class="secnum">15.1</span>三种"不在 turn 里跑"的场景</h2>
+
+<table>
+  <thead><tr><th>场景</th><th>触发方式</th><th>对应子系统</th></tr></thead>
+  <tbody>
+    <tr><td>定时自动跑("每天 9 点把昨日 PR 列表总结发到 Slack")</td><td>调度器 tick</td><td>cron/scheduler.py</td></tr>
+    <tr><td>Agent 自己排课("下次见到这报错时 1 小时后再试")</td><td>LLM 调 cronjob 工具</td><td>tools/cronjob_tools.py</td></tr>
+    <tr><td>批量生成训练数据(几千条 prompt → 几千条轨迹)</td><td>CLI <code>batch_runner.py</code></td><td>batch_runner.py + trajectory_compressor.py</td></tr>
+    <tr><td>跑 SWE-Bench 风格评测</td><td>CLI <code>mini_swe_runner.py</code></td><td>mini_swe_runner.py</td></tr>
+  </tbody>
+</table>
+
+<p>共同特点:<em>没有用户看着</em>。这意味着所有失败都得"自己救",所有产出都得记盘,所有资源都得有 cap。</p>
+
+<pre class="mermaid">
+flowchart TB
+  subgraph Foreground["前 14 章 — 同步 Agent"]
+    U["用户消息"] --&gt; Loop["run_conversation"]
+    Loop --&gt; R["回复"]
+  end
+  subgraph Background["本章 — 后台执行栈"]
+    direction TB
+    Sched["Cron Scheduler<br/>(tick 每 60s)"] --&gt; Job["定时 Agent"]
+    LLM["LLM 自己排课<br/>(cronjob 工具)"] --&gt; Job
+    Batch["batch_runner<br/>(多进程 Pool)"] --&gt; Traj["轨迹文件"]
+    Traj --&gt; Comp["trajectory_compressor<br/>(LLM 总结中段)"]
+    Comp --&gt; SFT["SFT 训练集"]
+    SWE["mini_swe_runner"] --&gt; Eval["pass/fail 报告"]
+  end
+  Background -.-&gt; KeyPoints["共同关切:<br/>失败自救 · 持久化 · 资源 cap"]:::accent
+  classDef accent fill:#f5ede0,stroke:#8b1538,color:#8b1538
+</pre>
+
+<h2 class="section"><span class="secnum">15.2</span>Cron 调度:jobs.py + scheduler.py</h2>
+
+<h3>15.2.1 Job 持久化结构</h3>
+
+<p>Cron 的"job 数据库"是一个 JSON 文件 <code>~/.hermes/cron/jobs.json</code>。粗暴但有效。看 job schema(来自 <code>create_job()</code>):</p>
+
+<pre><code><span class="filename">cron/jobs.py:654 (节选)</span>
+job = {
+    <span class="s">"id"</span>: job_id,                       <span class="c"># UUID hex[:12], FS-safe</span>
+    <span class="s">"name"</span>: name <span class="k">or</span> label_source[:<span class="num">50</span>],
+    <span class="s">"prompt"</span>: prompt_text,               <span class="c"># 给 Agent 的指令</span>
+    <span class="s">"skills"</span>: normalized_skills,         <span class="c"># 要加载的 skill</span>
+    <span class="s">"model"</span>: normalized_model,           <span class="c"># 单 job 模型覆盖(可空)</span>
+    <span class="s">"provider"</span>: normalized_provider,
+    <span class="s">"base_url"</span>: normalized_base_url,
+    <span class="s">"script"</span>: normalized_script,         <span class="c"># 预脚本路径 ~/.hermes/scripts/</span>
+    <span class="s">"no_agent"</span>: normalized_no_agent,     <span class="c"># True = 跳过 LLM,直接跑脚本</span>
+    <span class="s">"context_from"</span>: context_from,       <span class="c"># 链式上游 job IDs</span>
+    <span class="s">"schedule"</span>: parsed_schedule,         <span class="c"># {kind, minutes, expr, run_at}</span>
+    <span class="s">"repeat"</span>: {<span class="s">"times"</span>: repeat, <span class="s">"completed"</span>: <span class="num">0</span>},
+    <span class="s">"enabled"</span>: <span class="k">True</span>,
+    <span class="s">"state"</span>: <span class="s">"scheduled"</span>,             <span class="c"># scheduled|paused|completed|error</span>
+    <span class="s">"next_run_at"</span>: <span class="f">compute_next_run</span>(parsed_schedule),
+    <span class="s">"last_run_at"</span>: <span class="k">None</span>,
+    <span class="s">"deliver"</span>: deliver,                  <span class="c"># local|origin|telegram:xxx</span>
+    <span class="s">"origin"</span>: origin,                    <span class="c"># {platform, chat_id, thread_id}</span>
+    <span class="s">"enabled_toolsets"</span>: normalized_toolsets,
+    <span class="s">"workdir"</span>: normalized_workdir,       <span class="c"># 项目根(AGENTS.md/CLAUDE.md 注入)</span>
+    <span class="s">"profile"</span>: normalized_profile,       <span class="c"># Hermes profile 隔离</span>
+}
+</code></pre>
+
+<p>持久化用 tempfile + atomic rename + fsync,owner-only 权限(0600):</p>
+
+<pre><code><span class="filename">cron/jobs.py:455-465</span>
+<span class="k">def</span> <span class="f">save_jobs</span>(jobs):
+    <span class="f">ensure_dirs</span>()
+    fd, tmp_path = tempfile.<span class="f">mkstemp</span>(dir=<span class="f">str</span>(JOBS_FILE.parent),
+                                     suffix=<span class="s">'.tmp'</span>, prefix=<span class="s">'.jobs_'</span>)
+    <span class="k">try</span>:
+        <span class="k">with</span> os.<span class="f">fdopen</span>(fd, <span class="s">'w'</span>, encoding=<span class="s">'utf-8'</span>) <span class="k">as</span> f:
+            json.<span class="f">dump</span>({<span class="s">"jobs"</span>: jobs, <span class="s">"updated_at"</span>: <span class="f">_hermes_now</span>().<span class="f">isoformat</span>()}, f)
+            f.<span class="f">flush</span>()
+            os.<span class="f">fsync</span>(f.<span class="f">fileno</span>())            <span class="c"># 强制落盘</span>
+        <span class="f">atomic_replace</span>(tmp_path, JOBS_FILE)   <span class="c"># 原子 rename</span>
+        <span class="f">_secure_file</span>(JOBS_FILE)               <span class="c"># chmod 0600</span>
+</code></pre>
+
+<div class="callout">
+  <span class="label">为什么不用 SQLite</span>
+  Cron 状态非常小(几十到几百个 job),频率低(查询间隔 60 秒)。JSON + 锁简单可读、
+  可手动编辑、可 grep。SQLite 对这种用例反而过重。<em>对的工具用对的地方</em>。
+</div>
+
+<h3>15.2.2 调度解析:四种格式统一</h3>
+
+<pre><code><span class="filename">cron/jobs.py:209 (parse_schedule)</span>
+<span class="s">"30m"</span>                    <span class="k">→</span> 30 分钟后一次   (kind=<span class="s">"once"</span>, run_at=now+30m)
+<span class="s">"every 30m"</span>              <span class="k">→</span> 每 30 分钟重复  (kind=<span class="s">"interval"</span>, minutes=<span class="num">30</span>)
+<span class="s">"0 9 * * *"</span>              <span class="k">→</span> 标准 cron 表达式 (kind=<span class="s">"cron"</span>, expr=<span class="s">"0 9 * * *"</span>)
+<span class="s">"every 2h"</span>               <span class="k">→</span> 每 2 小时       (kind=<span class="s">"interval"</span>, minutes=<span class="num">120</span>)
+<span class="s">"2026-02-03T14:00:00"</span>    <span class="k">→</span> 一次性绝对时刻   (kind=<span class="s">"once"</span>, run_at=ISO_str)
+</code></pre>
+
+<p>"interval" 和 "every Xm" 是同一回事的两种说法——Hermes 都接受,内部统一成 <code>minutes</code>。
+"cron" 用 <code>croniter</code> 库解析。所有格式都汇成 dict,后续 <code>compute_next_run()</code> 统一处理。</p>
+
+<h3>15.2.3 tick 循环 + 文件锁</h3>
+
+<p>Cron 没有独立 daemon ——它在<em>每次 Hermes Gateway 进程的事件循环里</em>每 60 秒检查一次。
+但如果用户同时跑了 CLI 和 Gateway,两边都想 tick 怎么办? <strong>文件锁</strong>:</p>
+
+<pre><code><span class="filename">cron/scheduler.py:1843 (tick 入口)</span>
+<span class="k">def</span> <span class="f">tick</span>(verbose=<span class="k">True</span>, adapters=<span class="k">None</span>, loop=<span class="k">None</span>) <span class="k">-&gt;</span> int:
+    <span class="s">"""检查并跑所有到期 job。用文件锁,只允许一个 tick 同时跑。"""</span>
+    lock_dir, lock_file = <span class="f">_get_lock_paths</span>()
+    lock_dir.<span class="f">mkdir</span>(parents=<span class="k">True</span>, exist_ok=<span class="k">True</span>)
+
+    lock_fd = <span class="k">None</span>
+    <span class="k">try</span>:
+        lock_fd = <span class="f">open</span>(lock_file, <span class="s">"w"</span>, encoding=<span class="s">"utf-8"</span>)
+        <span class="k">if</span> fcntl:
+            fcntl.<span class="f">flock</span>(lock_fd, fcntl.LOCK_EX <span class="k">|</span> fcntl.LOCK_NB)   <span class="c"># 非阻塞</span>
+        <span class="k">elif</span> msvcrt:
+            msvcrt.<span class="f">locking</span>(lock_fd.<span class="f">fileno</span>(), msvcrt.LK_NBLCK, <span class="num">1</span>)
+    <span class="k">except</span> (OSError, IOError):
+        logger.<span class="f">debug</span>(<span class="s">"Tick skipped — 另一实例持锁"</span>)
+        <span class="k">if</span> lock_fd <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            lock_fd.<span class="f">close</span>()
+        <span class="k">return</span> <span class="num">0</span>
+
+    <span class="k">try</span>:
+        due_jobs = <span class="f">get_due_jobs</span>()
+        ...
+</code></pre>
+
+<p>设计要点:</p>
+
+<ul>
+  <li><strong>非阻塞锁</strong>(<code>LOCK_NB</code>)——抢不到立刻返回,不等。下一轮 60 秒后再试。</li>
+  <li><strong>跨平台</strong>—— Unix 用 <code>fcntl.flock</code>,Windows 用 <code>msvcrt.locking</code>。</li>
+  <li><strong>锁文件路径</strong>用 <code>get_hermes_home()</code> 解析,respect 当前 profile。</li>
+  <li><strong>先 advance_next_run 再执行</strong>(第 1885-1888 行):<em>在锁内</em>先把所有到期 job 的 <code>next_run_at</code> 推到下一轮,然后才开始执行。这样即使执行慢、下一个 tick 看到时,也不会重复触发。这是<em>至多一次</em>语义的保证。</li>
+</ul>
+
+<h3>15.2.4 catchup window:120s–2h clamp</h3>
+
+<p>问题:Hermes 重启,中间错过了 6 小时的"每 5 分钟一次"任务。要补跑 72 次吗?显然不要。</p>
+
+<p>Hermes 的策略:<em>用 grace window 决定补跑还是 fast-forward</em>。</p>
+
+<pre><code><span class="filename">cron/jobs.py:344-373</span>
+<span class="k">def</span> <span class="f">_compute_grace_seconds</span>(schedule: dict) <span class="k">-&gt;</span> int:
+    <span class="s">"""算出一个 job 最多可以晚多少秒还允许 catchup,
+    超出就 fast-forward 到下一次。
+
+    用周期的一半,clamp 在 [120s, 7200s] 区间。
+    每日 job → 12h//2 = 6h → 被 clamp 到 2h
+    每小时 job → 30 分钟
+    每 5 分钟 job → 2.5 分钟 → 被 clamp 到 120s
+    """</span>
+    MIN_GRACE = <span class="num">120</span>
+    MAX_GRACE = <span class="num">7200</span>   <span class="c"># 2 hours</span>
+
+    kind = schedule.<span class="f">get</span>(<span class="s">"kind"</span>)
+
+    <span class="k">if</span> kind == <span class="s">"interval"</span>:
+        period_seconds = schedule.<span class="f">get</span>(<span class="s">"minutes"</span>, <span class="num">1</span>) * <span class="num">60</span>
+        grace = period_seconds <span class="k">//</span> <span class="num">2</span>
+        <span class="k">return</span> <span class="f">max</span>(MIN_GRACE, <span class="f">min</span>(grace, MAX_GRACE))
+
+    <span class="k">if</span> kind == <span class="s">"cron"</span> <span class="k">and</span> HAS_CRONITER:
+        <span class="k">try</span>:
+            now = <span class="f">_hermes_now</span>()
+            cron = <span class="f">croniter</span>(schedule[<span class="s">"expr"</span>], now)
+            first = cron.<span class="f">get_next</span>(datetime)
+            second = cron.<span class="f">get_next</span>(datetime)
+            period_seconds = <span class="f">int</span>((second - first).<span class="f">total_seconds</span>())
+            grace = period_seconds <span class="k">//</span> <span class="num">2</span>
+            <span class="k">return</span> <span class="f">max</span>(MIN_GRACE, <span class="f">min</span>(grace, MAX_GRACE))
+        <span class="k">except</span> Exception:
+            <span class="k">pass</span>
+
+    <span class="k">return</span> MIN_GRACE
+</code></pre>
+
+<p>在 <code>_get_due_jobs_locked()</code> 里应用:</p>
+
+<pre><code><span class="filename">cron/jobs.py:1065-1085</span>
+<span class="k">if</span> kind <span class="k">in</span> {<span class="s">"cron"</span>, <span class="s">"interval"</span>} <span class="k">and</span> (now - next_run_dt).<span class="f">total_seconds</span>() &gt; grace:
+    <span class="c"># 错过 grace window — 这是"陈旧"任务,跳过本次,推到下一次</span>
+    new_next = <span class="f">compute_next_run</span>(schedule, now.<span class="f">isoformat</span>())
+    <span class="k">if</span> new_next:
+        logger.<span class="f">info</span>(
+            <span class="s">"Job '%s' missed scheduled time (%s, grace=%ds). "</span>
+            <span class="s">"Fast-forwarding to next run: %s"</span>,
+            job.<span class="f">get</span>(<span class="s">"name"</span>, job[<span class="s">"id"</span>]), next_run, grace, new_next,
+        )
+        <span class="k">for</span> rj <span class="k">in</span> raw_jobs:
+            <span class="k">if</span> rj[<span class="s">"id"</span>] == job[<span class="s">"id"</span>]:
+                rj[<span class="s">"next_run_at"</span>] = new_next
+                needs_save = <span class="k">True</span>
+                <span class="k">break</span>
+        <span class="k">continue</span>   <span class="c"># 跳过本次</span>
+</code></pre>
+
+<div class="callout tip">
+  <span class="label">心智模型</span>
+  Catchup 不是"全部补跑"也不是"全部丢弃"——是<em>"晚一点还行,晚太多就算了"</em>。
+  Daily 任务晚 1 小时补;晚 3 小时跳。这是<em>对生产 Agent 最友好</em>的折中。
+</div>
+
+<h3>15.2.5 Inactivity Timeout:基于"活动",不是 wall-clock</h3>
+
+<p>看 AGENTS.md 里说"3 分钟硬中断"。但读源码发现真实实现是 <strong>600 秒 inactivity-based 超时</strong>:</p>
+
+<pre><code><span class="filename">cron/scheduler.py:1644-1730 (节选)</span>
+<span class="c"># Job 可以跑几小时,只要它在调工具或收 stream tokens;
+# 但如果 600 秒没活动(API 卡住或工具死循环),就杀。</span>
+<span class="c"># 默认 600s;HERMES_CRON_TIMEOUT 覆盖;0 = 无限。</span>
+_cron_timeout = <span class="num">600.0</span>
+_cron_inactivity_limit = _cron_timeout <span class="k">if</span> _cron_timeout &gt; <span class="num">0</span> <span class="k">else</span> <span class="k">None</span>
+_POLL_INTERVAL = <span class="num">5.0</span>
+_cron_pool = concurrent.futures.<span class="f">ThreadPoolExecutor</span>(max_workers=<span class="num">1</span>)
+
+_cron_context = contextvars.<span class="f">copy_context</span>()
+_cron_future = _cron_pool.<span class="f">submit</span>(_cron_context.run, agent.run_conversation, prompt)
+_inactivity_timeout = <span class="k">False</span>
+
+<span class="k">try</span>:
+    <span class="k">while</span> <span class="k">True</span>:
+        done, _ = concurrent.futures.<span class="f">wait</span>({_cron_future}, timeout=_POLL_INTERVAL)
+        <span class="k">if</span> done:
+            result = _cron_future.<span class="f">result</span>()
+            <span class="k">break</span>
+        <span class="c"># 还在跑 — 检查 inactivity</span>
+        _idle_secs = <span class="num">0.0</span>
+        <span class="k">if</span> <span class="f">hasattr</span>(agent, <span class="s">"get_activity_summary"</span>):
+            _act = agent.<span class="f">get_activity_summary</span>()
+            _idle_secs = _act.<span class="f">get</span>(<span class="s">"seconds_since_activity"</span>, <span class="num">0.0</span>)
+        <span class="k">if</span> _idle_secs &gt;= _cron_inactivity_limit:
+            _inactivity_timeout = <span class="k">True</span>
+            <span class="k">break</span>
+
+<span class="k">if</span> _inactivity_timeout:
+    _activity = agent.<span class="f">get_activity_summary</span>()
+    logger.<span class="f">error</span>(
+        <span class="s">"Job '%s' idle %.0fs (limit %.0fs) | last=%s | iter=%s/%s | tool=%s"</span>,
+        job_name, _activity[<span class="s">"seconds_since_activity"</span>], _cron_inactivity_limit,
+        _activity[<span class="s">"last_activity_desc"</span>], _activity[<span class="s">"api_call_count"</span>],
+        _activity[<span class="s">"max_iterations"</span>], _activity.<span class="f">get</span>(<span class="s">"current_tool"</span>) <span class="k">or</span> <span class="s">"none"</span>,
+    )
+    agent.<span class="f">interrupt</span>(<span class="s">"Cron job timed out (inactivity)"</span>)
+    <span class="k">raise</span> <span class="f">TimeoutError</span>(...)
+</code></pre>
+
+<div class="callout warn">
+  <span class="label">"3 分钟"是过时的文档</span>
+  AGENTS.md 第 805 行讲的"3-minute hard interrupt"早期版本是。
+  现在的实现是 <strong>600s inactivity</strong>,完全不一样的语义。
+  <em>读文档时永远 cross-check 代码</em>——这是文档 rot 的典型案例。
+</div>
+
+<h3>15.2.6 Cron-spawned AIAgent 的差异</h3>
+
+<p>看 <code>cron/scheduler.py:1611-1642</code> 构造 cron 用的 AIAgent:</p>
+
+<pre><code><span class="filename">cron/scheduler.py:1611-1642 (关键字段)</span>
+agent = <span class="f">AIAgent</span>(
+    model=model,
+    max_iterations=max_iterations,
+    enabled_toolsets=<span class="f">_resolve_cron_enabled_toolsets</span>(job, _cfg),
+    disabled_toolsets=<span class="f">_resolve_cron_disabled_toolsets</span>(_cfg),
+    quiet_mode=<span class="k">True</span>,                          <span class="c"># 不打印 banner</span>
+    skip_context_files=<span class="k">not</span> <span class="f">bool</span>(_job_workdir),  <span class="c"># 无 workdir 就不自动找 AGENTS.md</span>
+    load_soul_identity=<span class="k">True</span>,                   <span class="c"># 但 SOUL.md 总是加载</span>
+    skip_memory=<span class="k">True</span>,                          <span class="c"># 关键!不污染主 memory</span>
+    platform=<span class="s">"cron"</span>,                            <span class="c"># 平台标签</span>
+    session_id=_cron_session_id,                  <span class="c"># 独立 session</span>
+    session_db=_session_db,
+)
+</code></pre>
+
+<p>三个非显然的设计:</p>
+
+<ol>
+  <li><strong><code>skip_memory=True</code></strong>:不 load Mem0/Supermemory 等持久 memory。
+      理由——cron job 是"自动跑",输出不该污染人类用户的 memory layer,反过来 memory 里的
+      上下文也不该影响 job 的客观执行。</li>
+  <li><strong><code>disabled_toolsets</code></strong> 默认含 <code>["cronjob", "messaging", "clarify"]</code>。
+      cron job 不能创建新 cron job(防递归),不能 send_message(模糊责任),不能 clarify(无人答)。</li>
+  <li><strong><code>platform="cron"</code></strong>:工具集筛选时可以针对 cron 应用特殊限制
+      (例如某些工具只在 cli 模式有意义)。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">15.3</span>cronjob 工具:让 Agent 自己排课</h2>
+
+<p>这是 LLM-facing 的工具。Agent 在跑过程中可以决定"这事 1 小时后再做"。</p>
+
+<h3>15.3.1 9 个 actions</h3>
+
+<pre><code><span class="filename">tools/cronjob_tools.py (schema 节选)</span>
+<span class="s">"action"</span>: {
+    <span class="s">"enum"</span>: [
+        <span class="s">"create"</span>, <span class="s">"list"</span>, <span class="s">"show"</span>, <span class="s">"update"</span>, <span class="s">"remove"</span>,
+        <span class="s">"pause"</span>, <span class="s">"resume"</span>, <span class="s">"run"</span>, <span class="s">"run_now"</span>, <span class="s">"trigger"</span>,
+    ]
+}
+</code></pre>
+
+<p>所有 cron 操作收敛在一个工具里——schema 里的 description 把所有动词解释清楚。
+   LLM 选 action,余下参数按需带。比给 10 个独立工具紧凑。</p>
+
+<h3>15.3.2 Prompt Injection 扫描——16 类 pattern</h3>
+
+<p>因为 cron job 的 prompt 是<em>"将来某个时刻自动执行"</em>的,一次创建潜在跑 N 次。
+所以创建时必须扫:</p>
+
+<pre><code><span class="filename">tools/cronjob_tools.py:43-140 (扫描器)</span>
+_CRON_THREAT_PATTERNS = [
+    (<span class="s">r'ignore\s+(?:\w+\s+)*(?:previous|all|above|prior)\s+(?:\w+\s+)*instructions'</span>, <span class="s">"prompt_injection"</span>),
+    (<span class="s">r'do\s+not\s+tell\s+the\s+user'</span>, <span class="s">"deception_hide"</span>),
+    (<span class="s">r'system\s+prompt\s+override'</span>, <span class="s">"sys_prompt_override"</span>),
+    (<span class="s">r'disregard\s+(your|all|any)\s+(instructions|rules|guidelines)'</span>, <span class="s">"disregard_rules"</span>),
+    (<span class="s">r'cat\s+[^\n]*(\.env|credentials|\.netrc|\.pgpass)'</span>, <span class="s">"read_secrets"</span>),
+    (<span class="s">r'authorized_keys'</span>, <span class="s">"ssh_backdoor"</span>),
+    (<span class="s">r'/etc/sudoers|visudo'</span>, <span class="s">"sudoers_mod"</span>),
+    (<span class="s">r'rm\s+-rf\s+/'</span>, <span class="s">"destructive_root_rm"</span>),
+]
+_CRON_SECRET_VAR_RE = <span class="s">r'\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?'</span>
+_CRON_EXFIL_COMMAND_PATTERNS = [
+    (<span class="f">rf</span><span class="s">'curl\s+[^\n]*https?://[^\s"\'`]*{_CRON_SECRET_VAR_RE}'</span>, <span class="s">"exfil_curl_url"</span>),
+    (<span class="f">rf</span><span class="s">'wget\s+[^\n]*https?://[^\s"\'`]*{_CRON_SECRET_VAR_RE}'</span>, <span class="s">"exfil_wget_url"</span>),
+    ...
+]
+
+<span class="k">def</span> <span class="f">_scan_cron_prompt</span>(prompt: str) <span class="k">-&gt;</span> str:
+    <span class="c"># GitHub API token 是合法的(自带 skill 用)</span>
+    github_auth_header = re.<span class="f">search</span>(<span class="s">r'curl\s+...token\s+...api.github.com'</span>, prompt, re.IGNORECASE)
+    prompt_to_scan = prompt.<span class="f">replace</span>(...) <span class="k">if</span> github_auth_header <span class="k">else</span> prompt
+
+    <span class="c"># 检查不可见 Unicode</span>
+    <span class="k">for</span> char <span class="k">in</span> _CRON_INVISIBLE_CHARS:
+        <span class="k">if</span> char <span class="k">in</span> <span class="f">_strip_legitimate_emoji_zwj</span>(prompt_to_scan):
+            <span class="k">return</span> <span class="f">f</span><span class="s">"Blocked: invisible unicode U+{ord(char):04X}"</span>
+
+    <span class="c"># 威胁模式</span>
+    <span class="k">for</span> pattern, pid <span class="k">in</span> _CRON_THREAT_PATTERNS:
+        <span class="k">if</span> re.<span class="f">search</span>(pattern, prompt_to_scan, re.IGNORECASE):
+            <span class="k">return</span> <span class="f">f</span><span class="s">"Blocked: threat pattern '{pid}'"</span>
+
+    <span class="c"># 数据泄露模式</span>
+    <span class="k">for</span> pattern, pid <span class="k">in</span> _CRON_EXFIL_COMMAND_PATTERNS:
+        <span class="k">if</span> re.<span class="f">search</span>(pattern, prompt_to_scan, re.IGNORECASE):
+            <span class="k">return</span> <span class="f">f</span><span class="s">"Blocked: threat pattern '{pid}'"</span>
+
+    <span class="k">return</span> <span class="s">""</span>
+</code></pre>
+
+<p>三类威胁:</p>
+
+<ol>
+  <li><strong>Prompt override</strong>:"ignore previous instructions" 等典型 indirect injection 范式。</li>
+  <li><strong>系统破坏</strong>:rm -rf /、改 sudoers、改 authorized_keys。</li>
+  <li><strong>数据泄露</strong>:curl + 凭证 env var → 外部 URL(典型 token exfiltration)。
+      但 GitHub API token + api.github.com 是合法 skill 用例,白名单。</li>
+</ol>
+
+<p>这是<em>第 7 章 Capability Security 的纵深</em>——即使工具能调,prompt 本身也得过扫描。</p>
+
+<h3>15.3.3 no_agent=True:Watchdog 模式</h3>
+
+<p>有些任务根本不需要 LLM——比如"每 5 分钟检查 GPU 温度,>80 度报警"。<code>no_agent=True</code>:</p>
+
+<pre><code>cronjob(
+    action=<span class="s">"create"</span>,
+    schedule=<span class="s">"every 5m"</span>,
+    no_agent=<span class="k">True</span>,
+    script=<span class="s">"gpu_watchdog.sh"</span>,         <span class="c"># 路径相对 ~/.hermes/scripts/</span>
+    deliver=<span class="s">"origin"</span>,                <span class="c"># 输出回到我手机</span>
+)
+</code></pre>
+
+<p>"delivery 语义" 写得很清楚:</p>
+
+<ul>
+  <li>stdout 非空 → 原样作为消息发给 origin</li>
+  <li>stdout <strong>空 → 完全静默</strong>(用户什么也不看见)——典型 watchdog "没事就别说话"模式</li>
+  <li>退出码 ≠ 0 → 发错误警报(防止 watchdog 静默失败)</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">Watchdog 模式的智慧</span>
+  这种"成功无输出 = 静默"的契约是 Unix 哲学。一个监控脚本如果没事就吵,
+  早晚被用户静音;静音后真出事也看不见。<em>"沉默 = 一切正常"</em>是健康的合约。
+  Hermes 把这个原则做进了 cron 工具的 delivery 语义。
+</div>
+
+<h2 class="section"><span class="secnum">15.4</span>Batch Runner:并行轨迹生成</h2>
+
+<p>批量 prompt → 批量 trajectories(给 SFT 用)。1321 行,用 multiprocessing.Pool:</p>
+
+<pre><code><span class="filename">batch_runner.py (核心)</span>
+<span class="k">from</span> multiprocessing <span class="k">import</span> Pool, Lock
+
+_WORKER_CONFIG = {}    <span class="c"># 给 worker 进程的全局配置</span>
+
+<span class="k">def</span> <span class="f">_process_single_prompt</span>(prompt_index, prompt_data, batch_num, config):
+    <span class="s">"""每个 worker 进程处理一条 prompt"""</span>
+    prompt = prompt_data[<span class="s">"prompt"</span>]
+    task_id = <span class="f">f</span><span class="s">"task_{prompt_index}"</span>
+
+    <span class="c"># Per-prompt container image override</span>
+    container_image = prompt_data.<span class="f">get</span>(<span class="s">"image"</span>) <span class="k">or</span> prompt_data.<span class="f">get</span>(<span class="s">"docker_image"</span>)
+    <span class="k">if</span> container_image:
+        env_type = os.<span class="f">getenv</span>(<span class="s">"TERMINAL_ENV"</span>, <span class="s">"local"</span>)
+        <span class="k">if</span> env_type == <span class="s">"docker"</span>:
+            <span class="c"># 提前验证镜像可用,免得花了 token 再发现镜像不在</span>
+            probe = subprocess.<span class="f">run</span>([<span class="s">"docker"</span>, <span class="s">"image"</span>, <span class="s">"inspect"</span>, container_image],
+                                   capture_output=<span class="k">True</span>, timeout=<span class="num">10</span>)
+            <span class="k">if</span> probe.returncode != <span class="num">0</span>:
+                pull = subprocess.<span class="f">run</span>([<span class="s">"docker"</span>, <span class="s">"pull"</span>, container_image],
+                                      capture_output=<span class="k">True</span>, timeout=<span class="num">600</span>)
+                <span class="k">if</span> pull.returncode != <span class="num">0</span>:
+                    <span class="k">return</span> {<span class="s">"success"</span>: <span class="k">False</span>, <span class="s">"error"</span>: <span class="f">f</span><span class="s">"Docker image not available: ..."</span>}
+</code></pre>
+
+<p>关键设计:</p>
+
+<ol>
+  <li><strong>multiprocessing 而非 threading</strong>:每个进程独立 Python GIL,真并行。LLM API call 是 IO bound 但 token 处理是 CPU bound。</li>
+  <li><strong>每 prompt 可指定 docker image</strong>:不同任务可用不同环境(Python 3.11、Node 20、自定义)。Hermes 内部还支持 Modal/Singularity/Daytona 多种 sandbox 后端,通过 <code>register_task_env_overrides()</code> 注入。</li>
+  <li><strong>提前 docker inspect 验镜像</strong>:不在镜像可用前花 token——这是节省费用的关键防御。</li>
+</ol>
+
+<h3>15.4.1 Tool Stats 提取</h3>
+
+<p>训练数据需要标注"每条轨迹用了哪些工具,各调几次,成功率多少"。Hermes 用 5 步状态机提取:</p>
+
+<pre><code><span class="filename">batch_runner.py:125-205</span>
+<span class="k">def</span> <span class="f">_extract_tool_stats</span>(messages) <span class="k">-&gt;</span> Dict[str, Dict[str, int]]:
+    tool_stats = {}
+    tool_calls_map = {}   <span class="c"># tool_call_id → tool_name</span>
+
+    <span class="k">for</span> msg <span class="k">in</span> messages:
+        <span class="k">if</span> msg[<span class="s">"role"</span>] == <span class="s">"assistant"</span> <span class="k">and</span> msg.<span class="f">get</span>(<span class="s">"tool_calls"</span>):
+            <span class="k">for</span> tool_call <span class="k">in</span> msg[<span class="s">"tool_calls"</span>]:
+                tool_name = tool_call[<span class="s">"function"</span>][<span class="s">"name"</span>]
+                tool_call_id = tool_call[<span class="s">"id"</span>]
+                <span class="k">if</span> tool_name <span class="k">not</span> <span class="k">in</span> tool_stats:
+                    tool_stats[tool_name] = {<span class="s">"count"</span>: <span class="num">0</span>, <span class="s">"success"</span>: <span class="num">0</span>, <span class="s">"failure"</span>: <span class="num">0</span>}
+                tool_stats[tool_name][<span class="s">"count"</span>] += <span class="num">1</span>
+                tool_calls_map[tool_call_id] = tool_name
+
+        <span class="k">elif</span> msg[<span class="s">"role"</span>] == <span class="s">"tool"</span>:
+            <span class="c"># 解析 tool result 判成功/失败</span>
+            content_json = json.<span class="f">loads</span>(msg[<span class="s">"content"</span>]) <span class="k">if</span> <span class="f">isinstance</span>(msg[<span class="s">"content"</span>], str) <span class="k">else</span> ...
+            is_success = <span class="k">True</span>
+            <span class="k">if</span> <span class="f">isinstance</span>(content_json, dict) <span class="k">and</span> content_json.<span class="f">get</span>(<span class="s">"error"</span>) <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+                is_success = <span class="k">False</span>
+            <span class="k">if</span> tool_call_id <span class="k">in</span> tool_calls_map:
+                tool_name = tool_calls_map[tool_call_id]
+                tool_stats[tool_name][<span class="s">"success"</span> <span class="k">if</span> is_success <span class="k">else</span> <span class="s">"failure"</span>] += <span class="num">1</span>
+
+    <span class="k">return</span> tool_stats
+</code></pre>
+
+<p>注意"成功"的判定标准:工具返回 JSON 且 <code>error</code> 字段为 <code>None</code> 才算成功。如果 <code>error: null</code>
+   或 <code>error</code> 字段不存在都算成功——这是<em>故意宽松</em>的,因为很多工具不显式标 success。</p>
+
+<h3>15.4.2 输出格式</h3>
+
+<pre><code>{
+    <span class="s">"success"</span>: <span class="k">True</span>,
+    <span class="s">"prompt_index"</span>: i,
+    <span class="s">"trajectory"</span>: [{from, value}, ...],   <span class="c"># ShareGPT 格式</span>
+    <span class="s">"tool_stats"</span>: {tool_name: {count, success, failure}},
+    <span class="s">"reasoning_stats"</span>: {turns_with_reasoning, ...},
+    <span class="s">"completed"</span>: <span class="k">True</span>,                    <span class="c"># 模型自然结束?</span>
+    <span class="s">"partial"</span>: <span class="k">False</span>,                     <span class="c"># 被中断?</span>
+    <span class="s">"api_calls"</span>: <span class="num">12</span>,                       <span class="c"># 模型调用次数</span>
+    <span class="s">"toolsets_used"</span>: [<span class="s">"web"</span>, <span class="s">"file"</span>, ...],
+    <span class="s">"metadata"</span>: {batch_num, timestamp, model}
+}
+</code></pre>
+
+<p>每条 prompt 一个独立 result dict,可以分批写盘、可以恢复。<code>--resume</code> 标志通过对比已有
+   batch 输出文件和 dataset 决定从哪里继续。</p>
+
+<h2 class="section"><span class="secnum">15.5</span>Trajectory Compressor:用 LLM 压 LLM</h2>
+
+<p>大 model 跑出来的 trajectory 动辄 30K-100K tokens。但 SFT 训练时,大多 LLM 训练框架要求每条样本
+&lt;= 16K tokens。怎么压?</p>
+
+<p>方案:<em>保护头尾,LLM 总结中段</em>。这就是 <code>trajectory_compressor.py</code>。</p>
+
+<h3>15.5.1 配置</h3>
+
+<pre><code><span class="filename">trajectory_compressor.py:82-179</span>
+<span class="k">@dataclass</span>
+<span class="k">class</span> <span class="n">CompressionConfig</span>:
+    <span class="c"># Tokenizer</span>
+    tokenizer_name: str = <span class="s">"moonshotai/Kimi-K2-Thinking"</span>
+
+    <span class="c"># 压缩目标</span>
+    target_max_tokens: int = <span class="num">15250</span>      <span class="c"># 压完上限</span>
+    summary_target_tokens: int = <span class="num">750</span>    <span class="c"># 总结约多长</span>
+
+    <span class="c"># 保护层</span>
+    protect_first_system: bool = <span class="k">True</span>   <span class="c"># 首 system</span>
+    protect_first_human: bool = <span class="k">True</span>    <span class="c"># 首 user 输入</span>
+    protect_first_gpt: bool = <span class="k">True</span>      <span class="c"># 首 assistant 响应</span>
+    protect_first_tool: bool = <span class="k">True</span>     <span class="c"># 首 tool 结果</span>
+    protect_last_n_turns: int = <span class="num">4</span>      <span class="c"># 最后 4 轮</span>
+
+    <span class="c"># 总结用 OpenRouter Gemini Flash(便宜)</span>
+    summarization_model: str = <span class="s">"google/gemini-3-flash-preview"</span>
+    api_key_env: str = <span class="s">"OPENROUTER_API_KEY"</span>
+    temperature: float = <span class="num">0.3</span>
+
+    add_summary_notice: bool = <span class="k">True</span>
+    summary_notice_text: str = <span class="s">"\n\nSome of your previous tool responses may be summarized to preserve context."</span>
+</code></pre>
+
+<h3>15.5.2 算法</h3>
+
+<pre class="mermaid">
+flowchart TB
+  In["输入轨迹<br/>(50 turns, 32K tokens)"] --&gt; Count["数 token 数"]
+  Count --&gt; Cmp{"总 token<br/>≤ 15.25K?"}
+  Cmp --&gt;|是| Skip["不压"]
+  Cmp --&gt;|否| Find["定位可压区间<br/>(头尾保护之间)"]
+  Find --&gt; Calc["算需省 tokens<br/>= 总数 - target + summary_size"]
+  Calc --&gt; Accum["从前往后累加 turns<br/>直到累计 ≥ 需省"]
+  Accum --&gt; Sum["送 Gemini Flash 总结"]
+  Sum --&gt; Build["重建:头 + 总结 + 尾"]
+  Build --&gt; Out["压缩后轨迹<br/>(~15K tokens)"]
+</pre>
+
+<pre><code><span class="filename">trajectory_compressor.py:709-827 (核心)</span>
+<span class="k">def</span> <span class="f">compress_trajectory</span>(self, trajectory):
+    metrics = <span class="f">TrajectoryMetrics</span>()
+    metrics.original_turns = <span class="f">len</span>(trajectory)
+
+    turn_tokens = self.<span class="f">count_turn_tokens</span>(trajectory)
+    total_tokens = <span class="f">sum</span>(turn_tokens)
+    metrics.original_tokens = total_tokens
+
+    <span class="k">if</span> total_tokens &lt;= self.config.target_max_tokens:
+        metrics.skipped_under_target = <span class="k">True</span>
+        <span class="k">return</span> trajectory, metrics
+
+    <span class="c"># 找保护区:头部 4 个 + 尾部 4 个</span>
+    protected, compress_start, compress_end = self.<span class="f">_find_protected_indices</span>(trajectory)
+
+    <span class="c"># 算要省多少 tokens</span>
+    tokens_to_save = total_tokens - self.config.target_max_tokens
+    target_tokens_to_compress = tokens_to_save + self.config.summary_target_tokens
+
+    <span class="c"># 从前往后累加,累到够省即止</span>
+    accumulated_tokens = <span class="num">0</span>
+    compress_until = compress_start
+    <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(compress_start, compress_end):
+        accumulated_tokens += turn_tokens[i]
+        compress_until = i + <span class="num">1</span>
+        <span class="k">if</span> accumulated_tokens &gt;= target_tokens_to_compress:
+            <span class="k">break</span>
+
+    <span class="c"># 提取要压的内容</span>
+    content_to_summarize = self.<span class="f">_extract_turn_content_for_summary</span>(
+        trajectory, compress_start, compress_until)
+
+    <span class="c"># 用 LLM 总结(这里是真调 API)</span>
+    summary = self.<span class="f">_generate_summary</span>(content_to_summarize, metrics)
+
+    <span class="c"># 重建:头 + 总结 + 尾</span>
+    compressed = []
+    <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(compress_start):
+        turn = trajectory[i].<span class="f">copy</span>()
+        <span class="k">if</span> turn.<span class="f">get</span>(<span class="s">"from"</span>) == <span class="s">"system"</span> <span class="k">and</span> self.config.add_summary_notice:
+            turn[<span class="s">"value"</span>] = turn[<span class="s">"value"</span>] + self.config.summary_notice_text
+        compressed.<span class="f">append</span>(turn)
+
+    compressed.<span class="f">append</span>({<span class="s">"from"</span>: <span class="s">"human"</span>, <span class="s">"value"</span>: summary})
+
+    <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(compress_until, <span class="f">len</span>(trajectory)):
+        compressed.<span class="f">append</span>(trajectory[i].<span class="f">copy</span>())
+
+    <span class="k">return</span> compressed, metrics
+</code></pre>
+
+<p>设计精髓:</p>
+
+<ul>
+  <li><strong>保护头尾,牺牲中段</strong>。模型读训练数据时,任务和结论都在两端,中间过程概括就够。</li>
+  <li><strong>"先头 + 总结 + 尾"重建</strong>。总结被 cast 成 <code>from: "human"</code>,作为合成的用户提示插入。</li>
+  <li><strong>System message 末尾追加 notice</strong>。让模型知道"中段有省略",避免训完模型以为某些信息真的不存在。</li>
+  <li><strong>用便宜 model 压(Gemini Flash)</strong>。压缩 pipeline 不该比训练贵。</li>
+</ul>
+
+<h2 class="section"><span class="secnum">15.6</span>Mini SWE Runner:Hermes 内置 SWE-Bench</h2>
+
+<p>SWE-Bench 评测需要在隔离环境里跑、捕获 patch、跑测试、记 pass/fail。<code>mini_swe_runner.py</code>(735 行)是
+Hermes 自己的简化实现。</p>
+
+<h3>15.6.1 任务格式</h3>
+
+<pre><code><span class="c"># 单任务模式</span>
+python mini_swe_runner.py --task <span class="s">"Create a hello world Python script"</span> --env local
+
+<span class="c"># 批量模式(JSONL)</span>
+python mini_swe_runner.py --tasks tasks.jsonl --env docker
+
+<span class="c"># tasks.jsonl 每行:</span>
+{<span class="s">"task"</span>: <span class="s">"..."</span>, <span class="s">"env"</span>: <span class="s">"docker"</span>, <span class="s">"image"</span>: <span class="s">"python:3.11-slim"</span>}
+</code></pre>
+
+<h3>15.6.2 环境抽象</h3>
+
+<pre><code><span class="filename">mini_swe_runner.py:121-150</span>
+<span class="k">def</span> <span class="f">create_environment</span>(env_type=<span class="s">"local"</span>, image=<span class="s">"python:3.11-slim"</span>,
+                       cwd=<span class="s">"/tmp"</span>, timeout=<span class="num">60</span>, **kwargs):
+    <span class="k">if</span> env_type == <span class="s">"local"</span>:
+        <span class="k">from</span> tools.environments.local <span class="k">import</span> LocalEnvironment
+        <span class="k">return</span> <span class="f">LocalEnvironment</span>(cwd=cwd, timeout=timeout)
+    <span class="k">elif</span> env_type == <span class="s">"docker"</span>:
+        <span class="k">from</span> tools.environments.docker <span class="k">import</span> DockerEnvironment
+        <span class="k">return</span> <span class="f">DockerEnvironment</span>(image=image, cwd=cwd, timeout=timeout, **kwargs)
+    <span class="k">elif</span> env_type == <span class="s">"modal"</span>:
+        <span class="k">from</span> tools.environments.modal <span class="k">import</span> ModalEnvironment
+        ...
+</code></pre>
+
+<p>三种沙箱后端:local(开发用)、docker(评测主力)、modal(serverless)。
+   每个后端都提供 <code>execute(cmd)</code> + <code>cleanup()</code> 接口——典型的策略模式。</p>
+
+<h3>15.6.3 完成标记</h3>
+
+<p>怎么知道 Agent 觉得任务完成了?用<em>哨兵字符串</em>:</p>
+
+<pre><code><span class="filename">mini_swe_runner.py:97</span>
+<span class="c"># When task is complete, output: echo "MINI_SWE_AGENT_FINAL_OUTPUT" followed by your result</span>
+</code></pre>
+
+<p>Agent 跑 <code>echo "MINI_SWE_AGENT_FINAL_OUTPUT\n&lt;result&gt;"</code> 时,runner 监听 terminal stdout,
+看到这个 token 就知道结束。这种<em>"约定优于实现"</em>的方法比让 Agent 调一个 finish_task 工具简单很多——
+不用 schema,prompt 里说一句就行。</p>
+
+<h2 class="section"><span class="secnum">15.7</span>设计原则提炼</h2>
+
+<p>5 个子系统看下来,提炼出后台执行的 6 条工程原则:</p>
+
+<ol>
+  <li><strong>持久化用最简结构</strong>。Cron job 用 JSON + tempfile + atomic rename + fsync + chmod 0600,
+      不上 SQLite。规模小、可读、可手改、可 grep。</li>
+  <li><strong>锁但别等</strong>。Cron tick 用 <code>LOCK_NB</code> 非阻塞——抢不到立刻让出,下一轮再来。
+      避免雪崩。</li>
+  <li><strong>Catchup 要有"放弃"机制</strong>。Grace window 决定"补"还是"跳"。重启后不该补 1000 次"每 5 分钟"。</li>
+  <li><strong>超时基于活动,不是 wall-clock</strong>。慢 LLM call 是正常的;<em>没有活动</em>才是异常。
+      <code>get_activity_summary()</code> 是核心 instrumentation。</li>
+  <li><strong>子任务的 toolset 默认窄</strong>。Cron job 不能创建 cron job(防递归),不能 send_message(模糊责任),
+      不能 clarify(无人答)。<em>能力受限优于约束 prompt</em>(第 7 章主题)。</li>
+  <li><strong>能在花 token 之前验证的,先验证</strong>。Docker pull 失败比花了一百次 LLM 调用才发现镜像没拉成本低 1000 倍。</li>
+</ol>
+
+<div class="callout good">
+  <span class="label">回想 ch13 提到的"长程任务可靠性"</span>
+  METR HCAST 数据显示 Agent 4 小时任务成功率只有 20%。Hermes 后台执行栈的
+  设计本质都是<em>"延长可靠 timeline"</em>的工程努力。锁、catchup clamp、inactivity timeout、
+  能力限制——每一条都是<em>"让 Agent 走完一天不偏离"</em>路上的具体砖。
+</div>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      Cron tick 的<em>"先 advance_next_run 再执行"</em>设计保证了什么不变量?
+      用 50 字描述如果反过来(先执行再 advance)会出什么 bug。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 cron-spawned AIAgent 要 <code>skip_memory=True</code>?
+      列出 2 个具体反面例子(不 skip 会出什么问题)。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Catchup grace window 是周期的 1/2,clamp 到 [120s, 2h]。
+      给一个"每周一上午 9 点"的 job 算出 grace 是多少。
+      如果服务器周日整天宕,周一中午才起,这 job 会跑吗?
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Trajectory Compressor 用 Gemini Flash 总结。但如果生成训练数据时用 Claude Opus,
+      压缩时用 Gemini——会不会引入<em>"模型风格差异"</em>污染训练?讨论怎么权衡。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Cron prompt injection 扫描器有 16 类 pattern + 1 个白名单(GitHub API)。
+      设计一个能绕过扫描器的 prompt(<em>纯思想实验,不要真的运行</em>),
+      然后讨论怎么改 scanner 防御它。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Mini SWE Runner 用<em>"echo MINI_SWE_AGENT_FINAL_OUTPUT 标记结束"</em>而不是工具。
+      这种"约定式"方案有什么<em>失败模式</em>?设计一个<em>"模型本想输出 final 但因 token 被截"</em>的场景。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch14-practice.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 14 章 · 动手实践与设计哲学</div>
+  </a>
+  <a class="next" href="ch16-multi-agent.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 16 章 · 多 Agent 协作的工程化</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

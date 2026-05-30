@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 17 章 · IDE 集成与 PTY 桥 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VIII · 深度专题</div>
+    <ol class="chapters">
+      <li><a data-num="15" href="ch15-background.html">后台执行栈</a></li>
+      <li><a data-num="16" href="ch16-multi-agent.html">多 Agent 协作</a></li>
+      <li class="current"><a data-num="17" href="ch17-ide-surfaces.html">IDE 集成 &amp; PTY</a></li>
+      <li><a data-num="18" href="ch18-mcp-internals.html">MCP 双向架构</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part VIII · 深度专题
+  <span class="sep">›</span>
+  第 17 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 17</div>
+  <h1>IDE 集成与 PTY 桥</h1>
+  <p class="chapter-subtitle">同一个 AIAgent 怎么同时活在 ACP/Zed 编辑器、Ink 终端 UI、
+    浏览器 xterm.js dashboard 里。一个核心 + 三种界面 + JSON-RPC 统一协议——
+    这是 LLM agent 多界面架构最干净的样本。</p>
+  <div class="meta">
+    <span>本章约 9,000 字</span>
+    <span>阅读 ~30 分钟</span>
+    <span>关键词：ACP · ContextVar · Ink · _SlashWorker · PTY · TIOCSWINSZ · xterm.js</span>
+  </div>
+</div>
+
+<p class="lead">
+  ch11 我们看 CLI / Gateway / ACP 三个出口。但 ACP 那段只点了一下,TUI 完全没展开,
+  Dashboard 也没讲怎么把 <code>hermes --tui</code> 嵌进浏览器。这一章拆这三个 IDE-class 表面的实现细节:
+  ACP 用<em>ContextVar</em>绑定编辑器审批 callback;TUI 是 Ink/React 通过 stdio JSON-RPC 跟 Python 网关说话;
+  Dashboard 用 WebSocket 把 PTY 字节双向转发给 xterm.js。3 种传输协议,1 个核心 agent,
+  零代码重复。
+</p>
+
+<h2 class="section"><span class="secnum">17.1</span>三种 IDE-class 表面的需求差异</h2>
+
+<table>
+  <thead><tr><th></th><th>ACP(Zed/VS Code)</th><th>TUI(Ink)</th><th>Dashboard(浏览器)</th></tr></thead>
+  <tbody>
+    <tr><td>传输</td><td>stdio JSON-RPC</td><td>stdio JSON-RPC</td><td>WebSocket 字节流</td></tr>
+    <tr><td>UI 框架</td><td>编辑器原生</td><td>Ink (React for terminal)</td><td>React + xterm.js</td></tr>
+    <tr><td>审批模型</td><td>编辑器 diff 弹窗</td><td>结构化 JSON event</td><td>嵌入 hermes --tui 沿用 TUI</td></tr>
+    <tr><td>状态保持</td><td>编辑器管</td><td>Python 网关管</td><td>PTY 进程管</td></tr>
+    <tr><td>典型用户</td><td>软件工程师</td><td>开发者(local CLI)</td><td>团队 / 远程</td></tr>
+    <tr><td>核心差异</td><td>需要 edit approval</td><td>需要交互响应快</td><td>需要远程可访问</td></tr>
+  </tbody>
+</table>
+
+<p>所有三种都<em>不应该</em>各自实现一遍 Agent loop。Hermes 的解法:
+   <strong>核心 AIAgent 不变,只换 callback + 平台标签</strong>。</p>
+
+<h2 class="section"><span class="secnum">17.2</span>ACP Adapter:stdio JSON-RPC + ContextVar 审批</h2>
+
+<h3>17.2.1 entry.py:严格 stdout 协议</h3>
+
+<pre><code><span class="filename">acp_adapter/entry.py:212-266</span>
+<span class="k">def</span> <span class="f">main</span>(argv=<span class="k">None</span>):
+    args = <span class="f">_parse_args</span>(argv)
+    <span class="k">if</span> args.version: <span class="f">_print_version</span>(); <span class="k">return</span>
+    <span class="k">if</span> args.check:   <span class="f">_run_check</span>();   <span class="k">return</span>
+    <span class="k">if</span> args.setup:   <span class="f">_run_setup</span>();   <span class="k">return</span>
+
+    <span class="f">_setup_logging</span>()       <span class="c"># 关键:logging 走 stderr,不污染 stdout</span>
+    <span class="f">_load_env</span>()
+
+    project_root = <span class="f">str</span>(Path(<span class="f">__file__</span>).<span class="f">resolve</span>().parent.parent)
+    <span class="k">if</span> project_root <span class="k">not</span> <span class="k">in</span> sys.path:
+        sys.path.<span class="f">insert</span>(<span class="num">0</span>, project_root)
+
+    <span class="k">import</span> acp
+    <span class="k">from</span> .server <span class="k">import</span> HermesACPAgent
+
+    <span class="c"># MCP discovery 在 asyncio 启动前(同步阶段安全)</span>
+    <span class="k">from</span> tools.mcp_tool <span class="k">import</span> discover_mcp_tools
+    <span class="f">discover_mcp_tools</span>()
+
+    agent = <span class="f">HermesACPAgent</span>()
+    <span class="k">try</span>:
+        asyncio.<span class="f">run</span>(acp.<span class="f">run_agent</span>(agent, use_unstable_protocol=<span class="k">True</span>))
+    <span class="k">except</span> KeyboardInterrupt:
+        logger.<span class="f">info</span>(<span class="s">"Shutting down (KeyboardInterrupt)"</span>)
+</code></pre>
+
+<p>关键约定:<em>stdout 仅 JSON-RPC,stderr 给人看</em>。<code>_setup_logging()</code> 强制 logging
+   handler 写 stderr。任何 <code>print()</code> 都禁止——会污染协议。</p>
+
+<h3>17.2.2 HermesACPAgent 类:capability 协商</h3>
+
+<pre><code><span class="filename">acp_adapter/server.py:445-527</span>
+<span class="k">class</span> <span class="n">HermesACPAgent</span>(acp.Agent):
+    _SLASH_COMMANDS = {
+        <span class="s">"help"</span>: <span class="s">"Show available commands"</span>,
+        <span class="s">"model"</span>: <span class="s">"Show or change current model"</span>,
+        <span class="s">"tools"</span>: <span class="s">"List available tools"</span>,
+        <span class="s">"context"</span>: <span class="s">"Show conversation context info"</span>,
+        <span class="s">"reset"</span>: <span class="s">"Clear conversation history"</span>,
+        <span class="s">"compact"</span>: <span class="s">"Compress conversation context"</span>,
+        <span class="s">"steer"</span>: <span class="s">"Inject guidance into running turn"</span>,
+        <span class="s">"queue"</span>: <span class="s">"Queue prompt for after current turn"</span>,
+    }
+
+    <span class="k">def</span> <span class="f">__init__</span>(self, session_manager=<span class="k">None</span>):
+        <span class="f">super</span>().<span class="f">__init__</span>()
+        self.session_manager = session_manager <span class="k">or</span> <span class="f">SessionManager</span>()
+        self._conn: Optional[acp.Client] = <span class="k">None</span>
+
+    <span class="k">async</span> <span class="k">def</span> <span class="f">initialize</span>(self, protocol_version=<span class="k">None</span>, ...):
+        <span class="k">return</span> <span class="f">InitializeResponse</span>(
+            protocol_version=acp.PROTOCOL_VERSION,
+            agent_info=<span class="f">Implementation</span>(name=<span class="s">"hermes-agent"</span>, version=HERMES_VERSION),
+            agent_capabilities=<span class="f">AgentCapabilities</span>(
+                load_session=<span class="k">True</span>,
+                prompt_capabilities=<span class="f">PromptCapabilities</span>(image=<span class="k">True</span>),
+                session_capabilities=<span class="f">SessionCapabilities</span>(
+                    fork=<span class="f">SessionForkCapabilities</span>(),
+                    list=<span class="f">SessionListCapabilities</span>(),
+                    resume=<span class="f">SessionResumeCapabilities</span>(),
+                ),
+            ),
+            auth_methods=<span class="f">build_auth_methods</span>(),
+        )
+</code></pre>
+
+<p>这里向编辑器声明 Hermes 支持:加载历史会话、image 输入、session fork/list/resume。
+编辑器收到后决定 UI 怎么显示(比如 Zed 会显示历史会话列表)。</p>
+
+<h3>17.2.3 Edit Approval:ContextVar 的精妙用法</h3>
+
+<p>每个 ACP session 都需要<em>独立的</em>编辑审批 callback。多 session 并发时,
+怎么让某个工具 dispatch 找到<em>对应 session 的</em> approval 函数?</p>
+
+<p><strong>Python ContextVar</strong>——同 asyncio 任务内传递的"隐式"变量。
+不需要逐层传参,工具 dispatch 时直接 <code>get()</code>。</p>
+
+<pre><code><span class="filename">acp_adapter/edit_approval.py:37-286</span>
+EditApprovalRequester = Callable[[EditProposal], bool]
+
+_EDIT_APPROVAL_REQUESTER: ContextVar[EditApprovalRequester <span class="k">|</span> <span class="k">None</span>] = <span class="f">ContextVar</span>(
+    <span class="s">"ACP_EDIT_APPROVAL_REQUESTER"</span>,
+    default=<span class="k">None</span>,
+)
+
+<span class="k">def</span> <span class="f">set_edit_approval_requester</span>(requester) <span class="k">-&gt;</span> Token:
+    <span class="s">"""Bind an ACP edit approval requester for the current context."""</span>
+    <span class="k">return</span> _EDIT_APPROVAL_REQUESTER.<span class="f">set</span>(requester)
+
+<span class="k">def</span> <span class="f">maybe_require_edit_approval</span>(tool_name: str, arguments: dict) <span class="k">-&gt;</span> str <span class="k">|</span> <span class="k">None</span>:
+    <span class="s">"""通用工具 dispatch 钩子。返回 None = 放行;返回 JSON 错误字符串 = 拦截。"""</span>
+    requester = <span class="f">get_edit_approval_requester</span>()
+    <span class="k">if</span> requester <span class="k">is</span> <span class="k">None</span>:
+        <span class="k">return</span> <span class="k">None</span>   <span class="c"># 不在 ACP 模式,放行</span>
+
+    <span class="k">try</span>:
+        proposal = <span class="f">build_edit_proposal</span>(tool_name, arguments)
+    <span class="k">except</span> Exception <span class="k">as</span> exc:
+        <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"error"</span>: <span class="f">f</span><span class="s">"Edit denied: cannot prepare diff ({exc})"</span>})
+
+    <span class="k">if</span> proposal <span class="k">is</span> <span class="k">None</span>:
+        <span class="k">return</span> <span class="k">None</span>    <span class="c"># 工具不属于"编辑类",放行</span>
+
+    <span class="k">try</span>:
+        approved = <span class="f">bool</span>(<span class="f">requester</span>(proposal))
+    <span class="k">except</span> Exception:
+        approved = <span class="k">False</span>    <span class="c"># 异常 = 拒</span>
+
+    <span class="k">if</span> approved:
+        <span class="k">return</span> <span class="k">None</span>
+    <span class="k">return</span> json.<span class="f">dumps</span>({<span class="s">"error"</span>: <span class="s">"Edit approval denied by ACP client; file was not modified."</span>})
+</code></pre>
+
+<p>这段 hook 在工具 dispatch 的<em>每一次</em>调用都会跑(<code>model_tools.handle_function_call</code> 调它)。
+工具调用流程:</p>
+
+<pre class="mermaid">
+flowchart TB
+  Tool["LLM 调 write_file('foo.py', '...')"] --&gt; Disp["handle_function_call"]
+  Disp --&gt; Hook["maybe_require_edit_approval()"]
+  Hook --&gt; CV["ContextVar.get('ACP_EDIT_APPROVAL_REQUESTER')"]
+  CV --&gt; Q1{"requester is None?"}
+  Q1 --&gt;|是(不是 ACP 模式)| Pass["放行,正常执行"]:::good
+  Q1 --&gt;|否| Build["build_edit_proposal()<br/>(diff against current)"]
+  Build --&gt; Ask["requester(proposal)<br/>→ Zed 弹 diff 给用户"]
+  Ask --&gt; Decide{"用户点了?"}
+  Decide --&gt;|Allow Once| Pass
+  Decide --&gt;|Deny / Timeout / Exception| Block["返回 JSON 错误,工具不执行"]:::warn
+  classDef good fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+  classDef warn fill:#f5ede0,stroke:#a86420,color:#a86420
+</pre>
+
+<p>requester 怎么"问"编辑器? Zed/VS Code 收到 <code>request_permission</code> JSON-RPC,
+   显示 diff,等用户点。Python 这边是阻塞同步等的(<code>future.result(timeout=60)</code>)。
+   60 秒不答自动拒。</p>
+
+<pre><code><span class="filename">acp_adapter/edit_approval.py (make_acp_edit_approval_requester)</span>
+<span class="k">def</span> <span class="f">make_acp_edit_approval_requester</span>(request_permission_fn, loop, session_id,
+                                       timeout=<span class="num">60.0</span>, auto_approve_getter=<span class="k">None</span>):
+    <span class="s">"""Return a sync requester that bridges to ACP permissions."""</span>
+
+    <span class="k">def</span> <span class="f">_requester</span>(proposal: EditProposal) <span class="k">-&gt;</span> bool:
+        <span class="k">from</span> acp.schema <span class="k">import</span> PermissionOption
+        <span class="k">from</span> agent.async_utils <span class="k">import</span> safe_schedule_threadsafe
+
+        <span class="c"># 1. 自动 approve 策略(.cursorignore 类似规则)</span>
+        <span class="k">if</span> auto_approve_getter <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            policy, cwd = <span class="f">auto_approve_getter</span>()
+            <span class="k">if</span> <span class="f">should_auto_approve_edit</span>(proposal, policy, cwd):
+                logger.<span class="f">info</span>(<span class="s">"Auto-approved ACP edit under policy %s: %s"</span>, policy, proposal.path)
+                <span class="k">return</span> <span class="k">True</span>
+
+        <span class="c"># 2. 否则发请求让用户决定</span>
+        options = [
+            <span class="f">PermissionOption</span>(option_id=<span class="s">"allow_once"</span>, kind=<span class="s">"allow_once"</span>, name=<span class="s">"Allow edit"</span>),
+            <span class="f">PermissionOption</span>(option_id=<span class="s">"deny"</span>, kind=<span class="s">"reject_once"</span>, name=<span class="s">"Deny"</span>),
+        ]
+        tool_call = <span class="f">build_acp_edit_tool_call</span>(proposal)
+        coro = <span class="f">request_permission_fn</span>(
+            session_id=session_id,
+            tool_call=tool_call,
+            options=options,
+        )
+        future = <span class="f">safe_schedule_threadsafe</span>(coro, loop, logger=logger, ...)
+        <span class="k">if</span> future <span class="k">is</span> <span class="k">None</span>:
+            <span class="k">return</span> <span class="k">False</span>
+        <span class="k">try</span>:
+            response = future.<span class="f">result</span>(timeout=timeout)   <span class="c"># 阻塞 60s</span>
+        <span class="k">except</span> (FutureTimeout, Exception):
+            future.<span class="f">cancel</span>()
+            <span class="k">return</span> <span class="k">False</span>
+
+        outcome = <span class="f">getattr</span>(response, <span class="s">"outcome"</span>, <span class="k">None</span>)
+        <span class="k">return</span> (
+            <span class="f">getattr</span>(outcome, <span class="s">"outcome"</span>, <span class="k">None</span>) == <span class="s">"selected"</span>
+            <span class="k">and</span> <span class="f">getattr</span>(outcome, <span class="s">"option_id"</span>, <span class="k">None</span>) == <span class="s">"allow_once"</span>
+        )
+
+    <span class="k">return</span> _requester
+</code></pre>
+
+<div class="callout tip">
+  <span class="label">ContextVar 是这里的 Hero</span>
+  没有 ContextVar,你得逐层传 <code>approval_cb</code> 参数,污染所有工具签名。
+  ContextVar 让<em>任意嵌套工具</em>都能透明拿到当前 session 的审批函数。
+  Python 标准库 3.7+ 的杀手级特性。Async-aware,任务间隔离。
+</div>
+
+<h2 class="section"><span class="secnum">17.3</span>TUI:Ink (React) 通过 stdio 跟 Python 网关说话</h2>
+
+<h3>17.3.1 进程模型</h3>
+
+<pre class="mermaid">
+flowchart LR
+  User["用户运行<br/>hermes --tui"] --&gt; Node["Node.js<br/>(Ink + React)"]
+  Node -.stdio JSON-RPC.-&gt; Py["Python<br/>tui_gateway"]
+  Py --&gt; Agent["AIAgent<br/>(platform='tui')"]
+  Py --&gt; Slash["_SlashWorker<br/>(persistent subprocess)"]
+  Slash --&gt; CLI["HermesCLI 实例<br/>(处理 / 命令)"]
+  Agent --&gt; LLM["LLM API"]
+  classDef ts fill:#e8eff5,stroke:#2c5282,color:#2c5282
+  classDef py fill:#f5ede0,stroke:#8b1538,color:#8b1538
+  class Node ts
+  class Py,Agent,Slash,CLI py
+</pre>
+
+<p>两层进程:</p>
+<ol>
+  <li><strong>Ink 进程</strong>:TypeScript/React,渲染终端 UI。它<em>不知道</em> Agent 怎么跑——只知道收 JSON 事件、显示出来。</li>
+  <li><strong>Python tui_gateway</strong>:跑 AIAgent,通过 stdio 给 Ink 发事件。同时 spawn 一个常驻 SlashWorker
+      处理 / 命令(避免每次 / 都重启 CLI)。</li>
+</ol>
+
+<h3>17.3.2 entry.py:tight stdio loop</h3>
+
+<pre><code><span class="filename">tui_gateway/entry.py:187-251</span>
+<span class="k">def</span> <span class="f">main</span>():
+    <span class="f">_install_sidecar_publisher</span>()
+
+    <span class="c"># MCP discovery 提前(同步阶段安全)</span>
+    cfg = <span class="f">read_raw_config</span>() <span class="k">or</span> {}
+    <span class="k">if</span> <span class="f">isinstance</span>(cfg.<span class="f">get</span>(<span class="s">"mcp_servers"</span>), dict):
+        <span class="k">from</span> tools.mcp_tool <span class="k">import</span> discover_mcp_tools
+        <span class="f">discover_mcp_tools</span>()
+
+    <span class="c"># 首事件:让 Ink 知道 gateway 起来了 + 当前 skin</span>
+    <span class="k">if</span> <span class="k">not</span> <span class="f">write_json</span>({
+        <span class="s">"jsonrpc"</span>: <span class="s">"2.0"</span>,
+        <span class="s">"method"</span>: <span class="s">"event"</span>,
+        <span class="s">"params"</span>: {<span class="s">"type"</span>: <span class="s">"gateway.ready"</span>, <span class="s">"payload"</span>: {<span class="s">"skin"</span>: <span class="f">resolve_skin</span>()}},
+    }):
+        sys.<span class="f">exit</span>(<span class="num">0</span>)   <span class="c"># 一开始就 broken pipe 直接退</span>
+
+    <span class="c"># 主循环:读一行,dispatch,写响应</span>
+    <span class="k">for</span> raw <span class="k">in</span> sys.stdin:
+        line = raw.<span class="f">strip</span>()
+        <span class="k">if</span> <span class="k">not</span> line: <span class="k">continue</span>
+        <span class="k">try</span>:
+            req = json.<span class="f">loads</span>(line)
+        <span class="k">except</span> json.JSONDecodeError:
+            <span class="f">write_json</span>({<span class="s">"jsonrpc"</span>: <span class="s">"2.0"</span>, <span class="s">"error"</span>: {<span class="s">"code"</span>: -<span class="num">32700</span>, <span class="s">"message"</span>: <span class="s">"parse error"</span>}})
+            <span class="k">continue</span>
+
+        resp = <span class="f">dispatch</span>(req)
+        <span class="k">if</span> resp <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            <span class="f">write_json</span>(resp)
+</code></pre>
+
+<h3>17.3.3 dispatch + thread pool 解决<em>"长任务卡住主循环"</em></h3>
+
+<p>问题:某些 RPC 跑几秒到几分钟(<code>session.resume</code> 加载几百条历史;<code>slash.exec</code> 调
+LLM 改 model)。如果在主线程里同步跑,这段时间里<em>新来的</em>事件(比如用户按打断)
+也没法处理。</p>
+
+<p>Hermes 的解法:<em>"长 handler 走 thread pool,短 handler 走主线程"</em>:</p>
+
+<pre><code><span class="filename">tui_gateway/server.py:137-253</span>
+_LONG_HANDLERS = <span class="f">frozenset</span>({
+    <span class="s">"browser.manage"</span>,
+    <span class="s">"cli.exec"</span>,
+    <span class="s">"session.branch"</span>,
+    <span class="s">"session.compress"</span>,
+    <span class="s">"session.resume"</span>,
+    <span class="s">"shell.exec"</span>,
+    <span class="s">"skills.manage"</span>,
+    <span class="s">"slash.exec"</span>,
+})
+
+_pool = concurrent.futures.<span class="f">ThreadPoolExecutor</span>(
+    max_workers=_rpc_pool_workers,
+    thread_name_prefix=<span class="s">"tui-rpc"</span>,
+)
+
+<span class="k">def</span> <span class="f">dispatch</span>(req, transport=<span class="k">None</span>):
+    t = transport <span class="k">or</span> _stdio_transport
+    token = <span class="f">bind_transport</span>(t)
+    <span class="k">try</span>:
+        normalized = <span class="f">_normalize_request</span>(req)
+        <span class="k">if</span> <span class="f">isinstance</span>(normalized, dict):
+            <span class="k">return</span> normalized
+        _rid, method, _params = normalized
+        <span class="k">if</span> method <span class="k">not</span> <span class="k">in</span> _LONG_HANDLERS:
+            <span class="k">return</span> <span class="f">handle_request</span>(req)    <span class="c"># 短 → 主线程同步返回</span>
+
+        <span class="c"># 长 → 拷贝 context,扔进 pool,主线程立刻返回 None</span>
+        ctx = contextvars.<span class="f">copy_context</span>()
+        <span class="k">def</span> <span class="f">run</span>():
+            <span class="k">try</span>:
+                resp = <span class="f">handle_request</span>(req)
+            <span class="k">except</span> Exception <span class="k">as</span> exc:
+                resp = <span class="f">_err</span>(req.<span class="f">get</span>(<span class="s">"id"</span>), -<span class="num">32000</span>, <span class="f">f</span><span class="s">"handler error: {exc}"</span>)
+            <span class="k">if</span> resp <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+                t.<span class="f">write</span>(resp)         <span class="c"># write_json 是锁保护的,并发安全</span>
+
+        _pool.<span class="f">submit</span>(<span class="k">lambda</span>: ctx.<span class="f">run</span>(run))
+        <span class="k">return</span> <span class="k">None</span>    <span class="c"># 主线程立刻让出,接下一条</span>
+    <span class="k">finally</span>:
+        <span class="f">reset_transport</span>(token)
+</code></pre>
+
+<p>关键<em>"copy_context"</em>:thread 里的 handler 需要看到 transport ContextVar 才能写响应。
+   <code>contextvars.copy_context()</code> 把当前 context 一并送进 worker thread。</p>
+
+<h3>17.3.4 _SlashWorker:持久 HermesCLI 实例</h3>
+
+<p>/ 命令(<code>/model</code>、<code>/tools</code>、<code>/skills</code>...)由 HermesCLI 处理。
+但每次都 spawn 一个新 CLI 进程会花 1-2 秒——太慢。Hermes 的解法:<em>一个常驻 subprocess</em>,
+通过 JSON 来回通信:</p>
+
+<pre><code><span class="filename">tui_gateway/server.py:_SlashWorker</span>
+<span class="k">class</span> <span class="n">_SlashWorker</span>:
+    <span class="s">"""Persistent HermesCLI subprocess for slash commands."""</span>
+
+    <span class="k">def</span> <span class="f">__init__</span>(self, session_key, model):
+        self._lock = threading.<span class="f">Lock</span>()
+        self._seq = <span class="num">0</span>
+        self.stderr_tail = []
+        self.stdout_queue = queue.<span class="f">Queue</span>()
+
+        argv = [
+            sys.executable, <span class="s">"-m"</span>, <span class="s">"tui_gateway.slash_worker"</span>,
+            <span class="s">"--session-key"</span>, session_key,
+        ]
+        <span class="k">if</span> model:
+            argv += [<span class="s">"--model"</span>, model]
+
+        self.proc = subprocess.<span class="f">Popen</span>(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=<span class="k">True</span>, bufsize=<span class="num">1</span>,
+            cwd=os.<span class="f">getcwd</span>(), env=os.environ.<span class="f">copy</span>(),
+        )
+        threading.<span class="f">Thread</span>(target=self._drain_stdout, daemon=<span class="k">True</span>).<span class="f">start</span>()
+        threading.<span class="f">Thread</span>(target=self._drain_stderr, daemon=<span class="k">True</span>).<span class="f">start</span>()
+
+    <span class="k">def</span> <span class="f">run</span>(self, command):
+        <span class="k">if</span> self.proc.<span class="f">poll</span>() <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            <span class="k">raise</span> <span class="f">RuntimeError</span>(<span class="s">"slash worker exited"</span>)
+
+        <span class="k">with</span> self._lock:
+            self._seq += <span class="num">1</span>
+            rid = self._seq
+            self.proc.stdin.<span class="f">write</span>(json.<span class="f">dumps</span>({<span class="s">"id"</span>: rid, <span class="s">"command"</span>: command}) + <span class="s">"\n"</span>)
+            self.proc.stdin.<span class="f">flush</span>()
+            <span class="k">while</span> <span class="k">True</span>:
+                msg = self.stdout_queue.<span class="f">get</span>(timeout=_SLASH_WORKER_TIMEOUT_S)
+                <span class="k">if</span> msg <span class="k">is</span> <span class="k">None</span>: <span class="k">break</span>
+                <span class="k">if</span> msg.<span class="f">get</span>(<span class="s">"id"</span>) != rid: <span class="k">continue</span>
+                <span class="k">if</span> <span class="k">not</span> msg.<span class="f">get</span>(<span class="s">"ok"</span>):
+                    <span class="k">raise</span> <span class="f">RuntimeError</span>(msg.<span class="f">get</span>(<span class="s">"error"</span>, <span class="s">"failed"</span>))
+                <span class="k">return</span> <span class="f">str</span>(msg.<span class="f">get</span>(<span class="s">"output"</span>, <span class="s">""</span>)).<span class="f">rstrip</span>()
+</code></pre>
+
+<p>对应的 worker 端(单独脚本):</p>
+
+<pre><code><span class="filename">tui_gateway/slash_worker.py (~76 行,核心)</span>
+<span class="k">def</span> <span class="f">main</span>():
+    args = p.<span class="f">parse_args</span>()
+    os.environ[<span class="s">"HERMES_SESSION_KEY"</span>] = args.session_key
+    os.environ[<span class="s">"HERMES_INTERACTIVE"</span>] = <span class="s">"1"</span>
+
+    <span class="c"># 静默 init,redirect stdout 防污染</span>
+    <span class="k">with</span> contextlib.<span class="f">redirect_stdout</span>(io.<span class="f">StringIO</span>()), \
+         contextlib.<span class="f">redirect_stderr</span>(io.<span class="f">StringIO</span>()):
+        cli = <span class="f">HermesCLI</span>(model=args.model <span class="k">or</span> <span class="k">None</span>,
+                         compact=<span class="k">True</span>,
+                         resume=args.session_key)
+
+    <span class="c"># 主循环:读 JSON,跑命令,回 JSON</span>
+    <span class="k">for</span> raw <span class="k">in</span> sys.stdin:
+        req = json.<span class="f">loads</span>(raw)
+        rid = req.<span class="f">get</span>(<span class="s">"id"</span>)
+        <span class="k">try</span>:
+            out = <span class="f">_run</span>(cli, req.<span class="f">get</span>(<span class="s">"command"</span>, <span class="s">""</span>))
+            sys.stdout.<span class="f">write</span>(json.<span class="f">dumps</span>({<span class="s">"id"</span>: rid, <span class="s">"ok"</span>: <span class="k">True</span>, <span class="s">"output"</span>: out}) + <span class="s">"\n"</span>)
+        <span class="k">except</span> Exception <span class="k">as</span> e:
+            sys.stdout.<span class="f">write</span>(json.<span class="f">dumps</span>({<span class="s">"id"</span>: rid, <span class="s">"ok"</span>: <span class="k">False</span>, <span class="s">"error"</span>: <span class="f">str</span>(e)}) + <span class="s">"\n"</span>)
+        sys.stdout.<span class="f">flush</span>()
+
+<span class="k">def</span> <span class="f">_run</span>(cli, command):
+    <span class="c"># 巧妙:HermesCLI 用 rich.Console 输出 — 重定向控制台底层文件到 StringIO</span>
+    buf = io.<span class="f">StringIO</span>()
+    cli.console = <span class="f">Console</span>(file=buf, force_terminal=<span class="k">True</span>, width=<span class="num">120</span>)
+    <span class="k">with</span> contextlib.<span class="f">redirect_stdout</span>(buf), contextlib.<span class="f">redirect_stderr</span>(buf):
+        cli.<span class="f">process_command</span>(command)
+    <span class="k">return</span> buf.<span class="f">getvalue</span>().<span class="f">rstrip</span>()
+</code></pre>
+
+<div class="callout">
+  <span class="label">为啥 rich.Console 要 patch 文件</span>
+  <code>rich.Console</code> 在构造时<em>抓取</em>当前 stdout 文件描述符,后续 <code>contextlib.redirect_stdout</code>
+  无效。所以要直接换 <code>cli.console.file = buf</code>。这种<em>"library 不配合 stdlib pattern"</em>是常见小坑。
+  Hermes 用 patch 解决——你写 LLM 集成时遇到类似坑要记得这招。
+</div>
+
+<h2 class="section"><span class="secnum">17.4</span>Web Dashboard:把 `hermes --tui` 嵌进浏览器</h2>
+
+<h3>17.4.1 架构</h3>
+
+<p>Dashboard 不是<em>重写</em> TUI——它是把 TUI <em>嵌进</em>浏览器。通过 PTY + WebSocket + xterm.js。</p>
+
+<pre class="mermaid">
+flowchart LR
+  Browser["浏览器<br/>xterm.js"] -.WebSocket /api/pty.-&gt; Server["FastAPI<br/>web_server.py"]
+  Server --&gt; PTY["PtyBridge<br/>(POSIX PTY)"]
+  PTY --&gt; Hermes["子进程:<br/>hermes --tui<br/>(Ink + Python gateway)"]
+  Hermes -.ANSI bytes.-&gt; PTY
+  PTY -.bytes.-&gt; Server
+  Server -.WebSocket.-&gt; Browser
+  classDef browser fill:#e8eff5,stroke:#2c5282,color:#2c5282
+  classDef server fill:#f5ede0,stroke:#8b1538,color:#8b1538
+  classDef hermes fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+  class Browser browser
+  class Server,PTY server
+  class Hermes hermes
+</pre>
+
+<h3>17.4.2 PtyBridge:POSIX-only 优雅降级</h3>
+
+<pre><code><span class="filename">hermes_cli/pty_bridge.py:1-100 (摘要)</span>
+<span class="s">"""PTY bridge for `hermes dashboard` chat tab.
+
+Design constraints:
+* **POSIX-only.** 依赖 ``fcntl``, ``termios``, ``ptyprocess``.
+  原生 Windows 没这些。导入时抛 ImportError,Dashboard 的 /chat tab
+  显示"用 WSL2"提示而不是 crash。其他功能(sessions、jobs、metrics)Windows 正常。
+"""</span>
+
+<span class="k">class</span> <span class="n">PtyBridge</span>:
+    <span class="k">@classmethod</span>
+    <span class="k">def</span> <span class="f">spawn</span>(cls, argv, *, cwd=<span class="k">None</span>, env=<span class="k">None</span>, cols=<span class="num">80</span>, rows=<span class="num">24</span>):
+        <span class="k">if</span> <span class="k">not</span> _PTY_AVAILABLE:
+            <span class="k">if</span> sys.platform.<span class="f">startswith</span>(<span class="s">"win"</span>):
+                <span class="k">raise</span> <span class="f">PtyUnavailableError</span>(
+                    <span class="s">"Pseudo-terminals unavailable. Hermes Windows = WSL only."</span>)
+            <span class="k">if</span> ptyprocess <span class="k">is</span> <span class="k">None</span>:
+                <span class="k">raise</span> <span class="f">PtyUnavailableError</span>(
+                    <span class="s">"pip install ptyprocess (or pip install -e '.[pty]')"</span>)
+
+        spawn_env = (os.environ.<span class="f">copy</span>() <span class="k">if</span> env <span class="k">is</span> <span class="k">None</span> <span class="k">else</span> env.<span class="f">copy</span>())
+        <span class="k">if</span> <span class="k">not</span> spawn_env.<span class="f">get</span>(<span class="s">"TERM"</span>):
+            spawn_env[<span class="s">"TERM"</span>] = <span class="s">"xterm-256color"</span>   <span class="c"># 一定要 set TERM</span>
+
+        proc = ptyprocess.PtyProcess.<span class="f">spawn</span>(
+            <span class="f">list</span>(argv),
+            cwd=cwd, env=spawn_env,
+            dimensions=(rows, cols),
+        )
+        <span class="k">return</span> <span class="f">cls</span>(proc)
+
+    <span class="k">def</span> <span class="f">resize</span>(self, cols, rows):
+        <span class="s">"""Forward terminal resize via TIOCSWINSZ ioctl."""</span>
+        <span class="k">if</span> self._closed:
+            <span class="k">return</span>
+        <span class="c"># struct winsize: rows, cols, xpixel, ypixel</span>
+        winsize = struct.<span class="f">pack</span>(<span class="s">"HHHH"</span>, <span class="f">max</span>(<span class="num">1</span>, rows), <span class="f">max</span>(<span class="num">1</span>, cols), <span class="num">0</span>, <span class="num">0</span>)
+        <span class="k">try</span>:
+            fcntl.<span class="f">ioctl</span>(self._fd, termios.TIOCSWINSZ, winsize)
+        <span class="k">except</span> OSError:
+            <span class="k">pass</span>
+</code></pre>
+
+<p>关键设计:</p>
+
+<ul>
+  <li><strong>TERM 兜底</strong>:CI 环境常无 <code>TERM</code>,<code>tput cols</code> 等会失败。强行设 xterm-256color。</li>
+  <li><strong>TIOCSWINSZ</strong>:用 ioctl 直接告诉内核"PTY 现在 80x24",触发子进程的 SIGWINCH。
+      这是<em>响应式终端 UI</em>的关键 — Ink 收到 SIGWINCH 重新布局。</li>
+</ul>
+
+<h3>17.4.3 WebSocket /api/pty:resize 协议</h3>
+
+<pre><code><span class="filename">hermes_cli/web_server.py:3455-3562 (摘要)</span>
+_RESIZE_RE = re.<span class="f">compile</span>(<span class="s">rb"\x1b\[RESIZE:(\d+);(\d+)\]"</span>)
+
+<span class="k">@app.websocket</span>(<span class="s">"/api/pty"</span>)
+<span class="k">async</span> <span class="k">def</span> <span class="f">pty_ws</span>(ws: WebSocket):
+    <span class="c"># --- auth 检查 ---</span>
+    <span class="k">if</span> <span class="k">not</span> _DASHBOARD_EMBEDDED_CHAT_ENABLED:
+        <span class="k">await</span> ws.<span class="f">close</span>(code=<span class="num">4403</span>); <span class="k">return</span>
+    token = ws.query_params.<span class="f">get</span>(<span class="s">"token"</span>, <span class="s">""</span>)
+    <span class="k">if</span> <span class="k">not</span> hmac.<span class="f">compare_digest</span>(token.<span class="f">encode</span>(), _SESSION_TOKEN.<span class="f">encode</span>()):
+        <span class="k">await</span> ws.<span class="f">close</span>(code=<span class="num">4401</span>); <span class="k">return</span>
+    <span class="k">if</span> <span class="k">not</span> <span class="f">_ws_request_is_allowed</span>(ws):
+        <span class="k">await</span> ws.<span class="f">close</span>(code=<span class="num">4403</span>); <span class="k">return</span>
+    <span class="k">await</span> ws.<span class="f">accept</span>()
+
+    <span class="c"># --- 平台兜底 ---</span>
+    <span class="k">if</span> <span class="k">not</span> _PTY_BRIDGE_AVAILABLE:
+        <span class="k">await</span> ws.<span class="f">send_text</span>(
+            <span class="s">"\r\n\x1b[31mChat unavailable: 需要 POSIX PTY,Windows 用 WSL2.\x1b[0m\r\n"</span>
+        )
+        <span class="k">await</span> ws.<span class="f">close</span>(code=<span class="num">1011</span>); <span class="k">return</span>
+
+    <span class="c"># --- spawn `hermes --tui` 子进程 ---</span>
+    argv, cwd, env = <span class="f">_resolve_chat_argv</span>(resume=resume, sidecar_url=sidecar_url)
+    bridge = PtyBridge.<span class="f">spawn</span>(argv, cwd=cwd, env=env)
+    loop = asyncio.<span class="f">get_running_loop</span>()
+
+    <span class="c"># --- 读 PTY 写 WS ---</span>
+    <span class="k">async</span> <span class="k">def</span> <span class="f">pump_pty_to_ws</span>():
+        <span class="k">while</span> <span class="k">True</span>:
+            chunk = <span class="k">await</span> loop.<span class="f">run_in_executor</span>(
+                <span class="k">None</span>, bridge.read, _PTY_READ_CHUNK_TIMEOUT)
+            <span class="k">if</span> chunk <span class="k">is</span> <span class="k">None</span>: <span class="k">return</span>     <span class="c"># EOF</span>
+            <span class="k">if</span> <span class="k">not</span> chunk:                  <span class="c"># 本 tick 无数据</span>
+                <span class="k">await</span> asyncio.<span class="f">sleep</span>(<span class="num">0</span>); <span class="k">continue</span>
+            <span class="k">await</span> ws.<span class="f">send_bytes</span>(chunk)
+    reader_task = asyncio.<span class="f">create_task</span>(<span class="f">pump_pty_to_ws</span>())
+
+    <span class="c"># --- 读 WS 写 PTY,识别 resize escape ---</span>
+    <span class="k">try</span>:
+        <span class="k">while</span> <span class="k">True</span>:
+            msg = <span class="k">await</span> ws.<span class="f">receive</span>()
+            <span class="k">if</span> msg[<span class="s">"type"</span>] == <span class="s">"websocket.disconnect"</span>: <span class="k">break</span>
+            raw = msg.<span class="f">get</span>(<span class="s">"bytes"</span>)
+            <span class="k">if</span> raw <span class="k">is</span> <span class="k">None</span>:
+                text = msg.<span class="f">get</span>(<span class="s">"text"</span>)
+                raw = text.<span class="f">encode</span>(<span class="s">"utf-8"</span>) <span class="k">if</span> <span class="f">isinstance</span>(text, str) <span class="k">else</span> <span class="s">b""</span>
+            <span class="k">if</span> <span class="k">not</span> raw: <span class="k">continue</span>
+
+            <span class="c"># Resize escape 本地消费,不写 PTY</span>
+            match = _RESIZE_RE.<span class="f">match</span>(raw)
+            <span class="k">if</span> match <span class="k">and</span> match.<span class="f">end</span>() == <span class="f">len</span>(raw):
+                cols = <span class="f">int</span>(match.<span class="f">group</span>(<span class="num">1</span>))
+                rows = <span class="f">int</span>(match.<span class="f">group</span>(<span class="num">2</span>))
+                bridge.<span class="f">resize</span>(cols=cols, rows=rows)
+                <span class="k">continue</span>
+
+            bridge.<span class="f">write</span>(raw)
+    <span class="k">except</span> WebSocketDisconnect:
+        <span class="k">pass</span>
+    <span class="k">finally</span>:
+        reader_task.<span class="f">cancel</span>()
+        bridge.<span class="f">close</span>()
+</code></pre>
+
+<p>这里有几个非常巧妙的设计:</p>
+
+<ol>
+  <li><strong>自定义 resize escape <code>\x1b[RESIZE:cols;rows]</code></strong>:不是标准 ANSI(标准没法表达 resize),
+      但浏览器 xterm.js fit addon 检测窗口大小后<em>合成</em>一个,服务器端识别它,转 TIOCSWINSZ。
+      标准协议外的 in-band 信号。</li>
+  <li><strong><code>run_in_executor</code> 把同步 PTY read 包装成 async</strong>:
+      PTY 读是阻塞的,丢给默认 thread pool,asyncio loop 不卡。</li>
+  <li><strong>Ephemeral SESSION_TOKEN</strong>:每次启动随机生成 32 字节 token,只通过同源 SPA HTML 注入。
+      防止任意源 WebSocket 连接。</li>
+  <li><strong>WebSocket 没法在 upgrade 时设 Authorization header</strong>,所以 token 走 query param。
+      用 <code>hmac.compare_digest</code> 防 timing attack。</li>
+</ol>
+
+<h3>17.4.4 Windows 优雅降级</h3>
+
+<p>Native Windows 没 POSIX PTY。Hermes 在<em>"功能消费点"</em>而非启动时检测:</p>
+
+<pre><code><span class="k">if</span> <span class="k">not</span> _PTY_BRIDGE_AVAILABLE:
+    <span class="k">await</span> ws.<span class="f">send_text</span>(
+        <span class="s">"\r\n\x1b[31mChat unavailable: the embedded terminal requires a "</span>
+        <span class="s">"POSIX PTY, which native Windows Python doesn't provide.\x1b[0m\r\n"</span>
+        <span class="s">"\x1b[33mInstall Hermes inside WSL2 to use the dashboard's /chat "</span>
+        <span class="s">"tab — the rest of the dashboard works here.\x1b[0m\r\n"</span>
+    )
+    <span class="k">await</span> ws.<span class="f">close</span>(code=<span class="num">1011</span>)
+</code></pre>
+
+<p>用户体验:</p>
+<ul>
+  <li>启动 Hermes Windows 完全没问题</li>
+  <li>Dashboard 主界面所有 tab 都能用(sessions、jobs、config、metrics)</li>
+  <li>只有点 /chat tab 时收到一行红字告诉用户"WSL"</li>
+</ul>
+
+<p>不崩、不烦、信息精确。这种<em>"局部 degrade"</em>是好的 cross-platform 工程范式。</p>
+
+<h2 class="section"><span class="secnum">17.5</span>三种界面共用一个 AIAgent</h2>
+
+<p>看三段 AIAgent 构造代码,差异令人惊讶地小:</p>
+
+<h3>CLI(cli.py:4819-4865 摘要)</h3>
+
+<pre><code>self.agent = <span class="f">AIAgent</span>(
+    ...
+    platform=<span class="s">"cli"</span>,
+    quiet_mode=<span class="k">not</span> self.verbose,
+    clarify_callback=self._clarify_callback,
+    reasoning_callback=self.<span class="f">_current_reasoning_callback</span>(),
+    thinking_callback=self._on_thinking,
+    tool_progress_callback=self._on_tool_progress,
+    tool_start_callback=self._on_tool_start <span class="k">if</span> self._inline_diffs_enabled <span class="k">else</span> <span class="k">None</span>,
+    tool_complete_callback=self._on_tool_complete,
+    stream_delta_callback=self._stream_delta <span class="k">if</span> self.streaming_enabled <span class="k">else</span> <span class="k">None</span>,
+)
+</code></pre>
+
+<h3>TUI(tui_gateway/server.py:2000-2053 摘要)</h3>
+
+<pre><code><span class="k">return</span> <span class="f">AIAgent</span>(
+    ...
+    platform=<span class="s">"tui"</span>,
+    quiet_mode=<span class="k">True</span>,
+    ephemeral_system_prompt=system_prompt <span class="k">or</span> <span class="k">None</span>,
+    **<span class="f">_agent_cbs</span>(sid),    <span class="c"># 所有 callback 走 JSON-RPC event 发给 Ink</span>
+)
+</code></pre>
+
+<h3>ACP(acp_adapter/session.py:596-628 摘要)</h3>
+
+<pre><code>kwargs = {
+    <span class="s">"platform"</span>: <span class="s">"acp"</span>,
+    <span class="s">"enabled_toolsets"</span>: <span class="f">_expand_acp_enabled_toolsets</span>([<span class="s">"hermes-acp"</span>], ...),
+    <span class="s">"quiet_mode"</span>: <span class="k">True</span>,
+    ...
+}
+agent = <span class="f">AIAgent</span>(**kwargs)
+<span class="c"># ACP stdio: stdout 必须 JSON-RPC,把人可读输出转 stderr</span>
+agent._print_fn = _acp_stderr_print
+</code></pre>
+
+<p>差异表:</p>
+
+<table>
+  <thead><tr><th>方面</th><th>CLI</th><th>TUI</th><th>ACP</th></tr></thead>
+  <tbody>
+    <tr><td>platform</td><td><code>"cli"</code></td><td><code>"tui"</code></td><td><code>"acp"</code></td></tr>
+    <tr><td>quiet_mode</td><td>False(verbose)</td><td>True</td><td>True</td></tr>
+    <tr><td>工具 callback</td><td>rich progress + inline diff</td><td>JSON-RPC event</td><td>ACP framework</td></tr>
+    <tr><td>edit approval</td><td>交互式 prompt</td><td>JSON-RPC approval.request</td><td>ContextVar + permissions</td></tr>
+    <tr><td>输出去向</td><td>stdout/stderr</td><td>JSON-RPC transport</td><td>ACP notifications</td></tr>
+    <tr><td>执行模型</td><td>主线程阻塞</td><td>thread pool</td><td>asyncio loop</td></tr>
+  </tbody>
+</table>
+
+<p>所有<em>不变</em>的都是工具发现、MCP registry 加载、provider credential 解析、agent 自身逻辑。
+   所有<em>变</em>的都是<em>callback + 平台标签</em>——非常薄的接口。这是<em>"Single Core, N Surfaces"</em>
+   设计模式的教科书示例。</p>
+
+<h2 class="section"><span class="secnum">17.6</span>5 条设计原则提炼</h2>
+
+<ol>
+  <li><strong>核心 Agent 是<em>不可知</em>的</strong>。AIAgent 不知道是 CLI/TUI/ACP 用它。
+      所有差异通过 callback 注入,通过 <code>platform</code> 字符串标记。</li>
+  <li><strong>所有 IDE-class 表面用 JSON-RPC</strong>(stdio 或 WebSocket)。一份消息格式覆盖所有 transport。</li>
+  <li><strong>Capability 抽象超越具体 UI</strong>。Edit approval 在 ACP 用 ContextVar,
+      在 TUI 用 JSON-RPC event,在 CLI 用同步 prompt。三种实现,同一个"capability"。</li>
+  <li><strong>长 handler 必须异步</strong>。短 RPC 主线程同步;长 RPC(session 加载、slash 执行、shell)
+      丢 thread pool。让短 RPC(打断、approval)随时能跑。</li>
+  <li><strong>Platform-specific feature 在<em>消费点</em>降级</strong>。
+      不在启动时检测 PTY,在用户打开 /chat tab 那一刻才检测+提示。其他功能继续可用。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">17.7</span>本章带走的</h2>
+
+<ul>
+  <li>Hermes 的三个 IDE-class 表面(ACP、TUI、Dashboard)<strong>共享同一个 AIAgent 核心</strong>。</li>
+  <li>ACP 用 <strong>ContextVar</strong> 透明传递编辑器审批 callback——多 session 隔离 + 零参数污染。</li>
+  <li>TUI 是 Node Ink + Python tui_gateway,通过 stdio JSON-RPC 通信。
+      <strong>长 handler 走 thread pool</strong> 让主循环不卡。</li>
+  <li><strong>_SlashWorker</strong> 持久 subprocess 处理 slash 命令——避免每次 / 都 spawn 新 CLI 的 1-2 秒开销。
+      rich.Console 需要 patch <code>file</code> 属性才能捕获输出(stdlib redirect 不够)。</li>
+  <li>Dashboard 通过 <strong>PTY + WebSocket</strong> 把 <code>hermes --tui</code> 嵌进浏览器。
+      自定义 resize escape <code>\x1b[RESIZE:cols;rows]</code> 触发 TIOCSWINSZ。</li>
+  <li><strong>Ephemeral SESSION_TOKEN</strong> + WebSocket query param + <code>hmac.compare_digest</code> 防 timing attack。</li>
+  <li>Native Windows 没 PTY ——<em>在消费点</em>降级提示,其他 dashboard 功能保留。</li>
+  <li>差异只在 <em>callback + platform 字符串</em>。<em>"Single Core, N Surfaces"</em> 是 LLM agent 多界面架构的核心范式。</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">这章对你做产品的意义</span>
+  下次你要给一个 LLM agent 加一个新 UI 表面(比如 Slack DM、移动 app、VR 终端),
+  这一章告诉你:<em>不要重写 agent 逻辑</em>。新建一个 callback bundle、一个 transport 实现、
+  一个 platform 字符串。Core 不动。Hermes 用 3 种表面验证了这个模式的可扩展性。
+</div>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      ACP 为什么用 ContextVar 而不是逐层传 approval_cb 参数?用 50 字回答。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      Dashboard 的 resize escape <code>\x1b[RESIZE:cols;rows]</code> 不是标准 ANSI。
+      为什么用 in-band(夹在字节流里)而不是 out-of-band(单独 JSON 消息)?
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      _SlashWorker 是<em>每 session 一个常驻 subprocess</em>。如果有 100 个并发 TUI session,
+      就有 100 个 subprocess。Hermes 怎么管理这些?(提示:idle timeout、session GC)
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      TUI dispatch 把 8 个 method 标为 <code>_LONG_HANDLERS</code> 走 thread pool。
+      如果未来要加一个 <code>cron.tick</code> 方法,应不应该加进 long handlers?讨论判断标准。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      设计一个新 IDE-class 表面:<strong>VR/AR Agent UI</strong>(Apple Vision Pro)。
+      它需要什么 callback、什么 transport?
+      Capability "vision-based file approval"(用户看着 diff 点头 = 同意)怎么落地?
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Dashboard 嵌入<em>整个</em> hermes --tui 进程,而不是直接调 AIAgent。
+      讨论这个决策的 trade-off:为什么不写一个 React TUI 直接复用 tui_gateway?
+      (提示:Ink + xterm.js 显示差异、心智模型一致性)
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch16-multi-agent.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 16 章 · 多 Agent 协作</div>
+  </a>
+  <a class="next" href="ch18-mcp-internals.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 18 章 · MCP 双向架构</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

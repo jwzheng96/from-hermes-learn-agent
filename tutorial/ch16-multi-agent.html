@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 16 章 · 多 Agent 协作的工程化 — 从 Hermes 学 Agent</title>
+<link rel="stylesheet" href="assets/style.css">
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  themeVariables: {
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", sans-serif',
+    fontSize: '14px',
+    primaryColor: '#fbfaf6',
+    primaryTextColor: '#2a2723',
+    primaryBorderColor: '#8b1538',
+    lineColor: '#4d4a44',
+    secondaryColor: '#f3f1e8',
+    tertiaryColor: '#e9e6d9',
+    background: '#fbfaf6',
+    mainBkg: '#fbfaf6',
+    secondBkg: '#f3f1e8',
+    tertiaryTextColor: '#2a2723',
+    nodeBorder: '#c2bea9',
+    clusterBkg: '#f6f4eb',
+    clusterBorder: '#d6d3c4',
+    titleColor: '#8b1538',
+    edgeLabelBackground: '#fbfaf6',
+    textColor: '#2a2723',
+    noteBkgColor: '#f5ede0',
+    noteBorderColor: '#a86420',
+    noteTextColor: '#2a2723'
+  },
+  flowchart: { htmlLabels: true, curve: 'basis' }
+});
+</script>
+</head>
+<body>
+<div class="layout">
+
+<nav class="sidebar">
+  <div class="book-title">从 Hermes 学 Agent</div>
+  <div class="book-sub">A Code-Level Book</div>
+  <a class="home-link" href="index.html">📖 总目录</a>
+  <div class="part">
+    <div class="part-label">Part I · 基础</div>
+    <ol class="chapters">
+      <li><a data-num="01" href="ch01-history.html">Agent 的前世今生</a></li>
+      <li><a data-num="02" href="ch02-mental-model.html">心智模型</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part II · 核心循环</div>
+    <ol class="chapters">
+      <li><a data-num="03" href="ch03-agent-loop.html">run_conversation 解剖</a></li>
+      <li><a data-num="04" href="ch04-protocol.html">消息协议 &amp; Tool Calling</a></li>
+      <li><a data-num="05" href="ch05-prompt-cache.html">System Prompt 与缓存</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part III · 工具系统</div>
+    <ol class="chapters">
+      <li><a data-num="06" href="ch06-tools.html">Tool Registry</a></li>
+      <li><a data-num="07" href="ch07-toolsets.html">Toolset &amp; 安全</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part IV · 学习闭环</div>
+    <ol class="chapters">
+      <li><a data-num="08" href="ch08-skills.html">Skills</a></li>
+      <li><a data-num="09" href="ch09-memory.html">Memory &amp; FTS5</a></li>
+      <li><a data-num="10" href="ch10-curator.html">Curator</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part V · 多面架构</div>
+    <ol class="chapters">
+      <li><a data-num="11" href="ch11-interfaces.html">CLI / Gateway / Profile</a></li>
+      <li><a data-num="12" href="ch12-providers-plugins.html">Provider &amp; Plugin</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VI · 前沿研究</div>
+    <ol class="chapters">
+      <li><a data-num="13" href="ch13-frontier.html">2024–2026 Frontier</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VII · 实践</div>
+    <ol class="chapters">
+      <li><a data-num="14" href="ch14-practice.html">动手与哲学</a></li>
+    </ol>
+  </div>
+  <div class="part">
+    <div class="part-label">Part VIII · 深度专题</div>
+    <ol class="chapters">
+      <li><a data-num="15" href="ch15-background.html">后台执行栈</a></li>
+      <li class="current"><a data-num="16" href="ch16-multi-agent.html">多 Agent 协作</a></li>
+      <li><a data-num="17" href="ch17-ide-surfaces.html">IDE 集成 &amp; PTY</a></li>
+      <li><a data-num="18" href="ch18-mcp-internals.html">MCP 双向架构</a></li>
+    </ol>
+  </div>
+</nav>
+
+<main>
+
+<div class="breadcrumb">
+  <a href="index.html">从 Hermes 学 Agent</a>
+  <span class="sep">›</span>
+  Part VIII · 深度专题
+  <span class="sep">›</span>
+  第 16 章
+</div>
+
+<div class="chapter-head">
+  <div class="chapter-num">Chapter 16</div>
+  <h1>多 Agent 协作的工程化</h1>
+  <p class="chapter-subtitle">从 ch07 的 delegate_task 介绍走向<em>真正能扛长任务</em>的多 Agent 系统。
+    SQLite WAL + CAS 的原子认领、失败熔断、文件状态协调、心跳续期——
+    这些把"并发跑 N 个子 agent"的玩具升级成生产级机器。</p>
+  <div class="meta">
+    <span>本章约 10,500 字</span>
+    <span>阅读 ~35 分钟</span>
+    <span>关键词：delegate_task · Kanban · WAL · CAS · 失败熔断 · 文件状态</span>
+  </div>
+</div>
+
+<p class="lead">
+  ch07 我们简短介绍了 delegate_task ——父 Agent 派子 Agent 这个 orchestrator-workers 模式。
+  这一章我们走<em>"生产真要用"</em>的深度:子 Agent 怎么共享父预算又不互相打架?并发 5 个 worker
+  时怎么防止两个抢同一个任务?子 Agent 改了文件父 Agent 怎么知道要重读?跑了一周的看板里
+  某个任务连续失败怎么自动停止试?这一章拆 delegate_tool.py 1900 行 + 整个 Kanban 子系统,
+  并讲清楚 Hermes 在<em>每一处</em>偏离"天真 spawn N children"模式的工程理由。
+</p>
+
+<h2 class="section"><span class="secnum">16.1</span>两套机制的分工:同步 vs 异步</h2>
+
+<p>Hermes 有两套多 Agent 机制,解决不同问题:</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>delegate_task</th><th>Kanban</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>调用方式</td><td>父 Agent 调工具,等返回</td><td>排进 SQLite,异步认领</td></tr>
+    <tr><td>生命周期</td><td>父 turn 内同步阻塞</td><td>跨进程、跨重启、跨用户</td></tr>
+    <tr><td>典型用例</td><td>"切 5 段文档并行总结"</td><td>"为 50 个 GitHub issue 各跑一个修复"</td></tr>
+    <tr><td>失败处理</td><td>父收到 error dict 继续</td><td>自动熔断,N 次失败后阻塞</td></tr>
+    <tr><td>持久化</td><td>无(进程结束子也结束)</td><td>SQLite WAL 完整</td></tr>
+  </tbody>
+</table>
+
+<p>记忆口诀:<em>delegate_task = 函数调用,Kanban = 任务队列</em>。本章先讲前者,再展开后者。</p>
+
+<h2 class="section"><span class="secnum">16.2</span>delegate_task:单 / 批两种形态</h2>
+
+<h3>16.2.1 入口签名</h3>
+
+<pre><code><span class="filename">tools/delegate_tool.py:1918-1942</span>
+<span class="k">def</span> <span class="f">delegate_task</span>(
+    goal: Optional[str] = <span class="k">None</span>,
+    context: Optional[str] = <span class="k">None</span>,
+    toolsets: Optional[List[str]] = <span class="k">None</span>,
+    tasks: Optional[List[Dict[str, Any]]] = <span class="k">None</span>,    <span class="c"># 批量模式</span>
+    max_iterations: Optional[int] = <span class="k">None</span>,
+    acp_command: Optional[str] = <span class="k">None</span>,
+    acp_args: Optional[List[str]] = <span class="k">None</span>,
+    role: Optional[str] = <span class="k">None</span>,                      <span class="c"># 'leaf' | 'orchestrator'</span>
+    parent_agent=<span class="k">None</span>,
+) <span class="k">-&gt;</span> str:
+    <span class="s">"""派一个或多个子 Agent。
+    Single 模式:goal (+ 可选 context/toolsets/role)
+    Batch 模式:tasks 数组 [{goal, context, toolsets, role}, ...]
+    """</span>
+    <span class="k">if</span> parent_agent <span class="k">is</span> <span class="k">None</span>:
+        <span class="k">return</span> <span class="f">tool_error</span>(<span class="s">"delegate_task requires a parent agent context."</span>)
+</code></pre>
+
+<h3>16.2.2 Batch 模式的并发模型</h3>
+
+<p>关键决定:<strong>Hermes 不用 asyncio,用 ThreadPoolExecutor</strong>。每个子 Agent 一个独立线程:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:1492-1512</span>
+_timeout_executor = <span class="f">ThreadPoolExecutor</span>(
+    max_workers=<span class="num">1</span>,
+    initializer=_set_subagent_approval_cb,
+    initargs=(<span class="f">_get_subagent_approval_callback</span>(),),
+)
+
+<span class="k">def</span> <span class="f">_run_with_thread_capture</span>():
+    _worker_thread_holder[<span class="s">"t"</span>] = threading.<span class="f">current_thread</span>()
+    <span class="k">return</span> child.<span class="f">run_conversation</span>(user_message=goal, task_id=child_task_id)
+
+_child_future = _timeout_executor.<span class="f">submit</span>(_run_with_thread_capture)
+<span class="k">try</span>:
+    result = _child_future.<span class="f">result</span>(timeout=child_timeout)
+</code></pre>
+
+<p>注意 <code>max_workers=1</code> 是<em>每个子 Agent 自己的 executor</em>,不是共享池。
+   Batch 模式下,父 Agent 在自己线程里循环 submit N 个独立 executor。这样:</p>
+
+<ul>
+  <li>每个子 Agent 有自己的线程隔离</li>
+  <li>每个 executor 都有审批 callback initializer——deferred 安装到 worker 线程</li>
+  <li>父并发上限由 <code>delegation.max_concurrent_children</code>(默认 3)控制</li>
+</ul>
+
+<h3>16.2.3 Role:leaf vs orchestrator,深度有上限</h3>
+
+<p>Role 决定子 Agent 能不能<em>再派</em>:</p>
+
+<table>
+  <thead><tr><th>role</th><th>能调 delegate_task?</th><th>typical 用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>"leaf"</code>(默认)</td><td>否(toolset 里被剥)</td><td>聚焦 worker</td></tr>
+    <tr><td><code>"orchestrator"</code></td><td>是,但深度受限</td><td>分层任务分解</td></tr>
+  </tbody>
+</table>
+
+<p>深度上限由<em>两道闸</em>守护:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:394-429 (深度配置)</span>
+<span class="k">def</span> <span class="f">_get_max_spawn_depth</span>():
+    val = cfg.<span class="f">get</span>(<span class="s">"delegation"</span>, {}).<span class="f">get</span>(<span class="s">"max_spawn_depth"</span>, _DEFAULT_MAX_SPAWN_DEPTH)
+    ival = <span class="f">int</span>(val)
+    clamped = <span class="f">max</span>(_MIN_SPAWN_DEPTH, <span class="f">min</span>(_MAX_SPAWN_DEPTH_CAP, ival))
+    <span class="c"># _MIN_SPAWN_DEPTH = 1 (默认 flat)</span>
+    <span class="c"># _MAX_SPAWN_DEPTH_CAP = 3 (硬天花板)</span>
+    <span class="k">if</span> clamped != ival:
+        logger.<span class="f">warning</span>(<span class="s">"clamping max_spawn_depth %d → %d"</span>, ival, clamped)
+    <span class="k">return</span> clamped
+</code></pre>
+
+<pre><code><span class="filename">tools/delegate_tool.py (子 Agent 构造,~line 1050)</span>
+<span class="c"># 父深度 + 1 = 子深度。子深度 ≥ 上限就强制 degrade 到 leaf</span>
+child_depth = parent_depth + <span class="num">1</span>
+<span class="k">if</span> child_depth &gt;= max_spawn_depth:
+    effective_role = <span class="s">"leaf"</span>     <span class="c"># 沉默 downgrade</span>
+</code></pre>
+
+<p>即使用户传 <code>role="orchestrator"</code>,只要达到深度上限,Hermes 会<em>静默</em>把它降级为 leaf
+并剥掉 delegation 工具。这防止意外的"orchestrator 派 orchestrator 派 orchestrator..."递归。</p>
+
+<div class="callout">
+  <span class="label">设计选择</span>
+  Static cap=3 是<em>"不信用户传对"</em>的纵深防御。Anthropic Building Effective Agents
+  里反复强调"agent 复杂度增加时调试难度指数增长"——所以 Hermes 直接堵死大于 3 层的可能。
+  生产里 99% 任务一层 orchestrator + N 个 leaf 就够。
+</div>
+
+<h2 class="section"><span class="secnum">16.3</span>子 Agent 的上下文隔离</h2>
+
+<p>这是 delegate_task 设计里<strong>最有价值</strong>的部分:子 Agent 从父继承什么,reset 什么。</p>
+
+<h3>16.3.1 构造时的 propagate 与 reset</h3>
+
+<pre><code><span class="filename">tools/delegate_tool.py:1106-1138</span>
+child = <span class="f">AIAgent</span>(
+    <span class="c"># ── 从父<em>继承</em>(避免重复配置) ──────</span>
+    base_url=effective_base_url,
+    api_key=effective_api_key,
+    model=effective_model,
+    provider=effective_provider,
+    api_mode=effective_api_mode,
+    max_iterations=max_iterations,
+    max_tokens=<span class="f">getattr</span>(parent_agent, <span class="s">"max_tokens"</span>, <span class="k">None</span>),
+    reasoning_config=child_reasoning,
+    prefill_messages=<span class="f">getattr</span>(parent_agent, <span class="s">"prefill_messages"</span>, <span class="k">None</span>),
+    fallback_model=parent_fallback,
+    platform=parent_agent.platform,                  <span class="c"># cli/tui/gateway 透传</span>
+    session_db=<span class="f">getattr</span>(parent_agent, <span class="s">"_session_db"</span>, <span class="k">None</span>),
+    parent_session_id=<span class="f">getattr</span>(parent_agent, <span class="s">"session_id"</span>, <span class="k">None</span>),
+
+    <span class="c"># ── 强制 <em>重置</em>(隔离子 Agent) ────────</span>
+    enabled_toolsets=child_toolsets,                 <span class="c"># 收窄(无 delegation 等)</span>
+    quiet_mode=<span class="k">True</span>,                              <span class="c"># 子不打印</span>
+    ephemeral_system_prompt=child_prompt,            <span class="c"># 全新 system prompt</span>
+    log_prefix=<span class="f">f</span><span class="s">"[subagent-{task_index}]"</span>,
+    skip_context_files=<span class="k">True</span>,                      <span class="c"># 不读 AGENTS.md/CLAUDE.md</span>
+    skip_memory=<span class="k">True</span>,                              <span class="c"># 不 load 持久 memory</span>
+    clarify_callback=<span class="k">None</span>,                         <span class="c"># 不能问用户</span>
+    iteration_budget=<span class="k">None</span>,                         <span class="c"># 全新 budget(下文有重要细节)</span>
+)
+</code></pre>
+
+<p>三类关键 reset:</p>
+
+<ol>
+  <li><strong>System prompt 完全重写</strong>。<code>ephemeral_system_prompt=child_prompt</code> 是基于 goal 现场生成的,
+      不带任何父 Agent 的身份/项目 context。</li>
+  <li><strong><code>skip_memory=True</code> + <code>skip_context_files=True</code></strong>。子 Agent 是 stateless worker,
+      不该看见父见过的 memory 或项目文件。</li>
+  <li><strong><code>iteration_budget=None</code></strong>。<em>新的</em>预算——子的 max_iterations 是从父 propagate 来的,
+      但运行过程中子和父是<em>独立计数</em>的。</li>
+</ol>
+
+<h3>16.3.2 _last_resolved_tool_names:进程级 global 的 save/restore</h3>
+
+<p>这是一个非常微妙的设计。<code>model_tools._last_resolved_tool_names</code> 是个全局 list,
+存"当前 LLM session 看到哪些工具"。某些工具(如 execute_code 的 sandbox 工具集)用它决定生成哪些 sub-tools。</p>
+
+<p>问题:子 Agent 的 toolset 比父窄(<code>delegation</code> 被剥)。子启动后会把这个 global 改成自己窄的集合。
+   如果子跑完后不 restore,父就<em>永久</em>失去了它本来有的工具。</p>
+
+<p>解法是<em>"finally restore"</em>:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:1337-1343, 1863-1869</span>
+<span class="c"># 构造前快照</span>
+_saved_tool_names = <span class="f">getattr</span>(child, <span class="s">"_delegate_saved_tool_names"</span>,
+                              <span class="f">list</span>(model_tools._last_resolved_tool_names))
+
+<span class="c"># 子 Agent 启动会把 global 改成它自己的窄集合 ...</span>
+child = <span class="f">AIAgent</span>(..., enabled_toolsets=child_toolsets, ...)
+
+<span class="c"># 子跑完后,finally 块里 restore</span>
+saved_tool_names = <span class="f">getattr</span>(child, <span class="s">"_delegate_saved_tool_names"</span>, <span class="k">None</span>)
+<span class="k">if</span> <span class="f">isinstance</span>(saved_tool_names, <span class="f">list</span>):
+    model_tools._last_resolved_tool_names = <span class="f">list</span>(saved_tool_names)
+</code></pre>
+
+<div class="callout warn">
+  <span class="label">为什么不去掉 global?</span>
+  这是"工程妥协"。理想做法是工具上下文用 ContextVar 而非进程 global。
+  但 Hermes 早期某些工具(execute_code 的 sandbox 检测)依赖<em>同步读 global</em>,
+  改 ContextVar 涉及大量 refactor。所以 save/restore 是<em>实用主义补丁</em>。
+  Hermes AGENTS.md 第 964 行有专门警告:"<code>_last_resolved_tool_names</code> is a process-global"。
+</div>
+
+<h2 class="section"><span class="secnum">16.4</span>子 Agent 的失败处理</h2>
+
+<h3>16.4.1 三种失败:timeout、exception、interrupt</h3>
+
+<p>Hermes 对每种失败都<em>返回 dict 而不是 raise</em>:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:1818-1840</span>
+<span class="k">except</span> Exception <span class="k">as</span> exc:
+    duration = <span class="f">round</span>(time.<span class="f">monotonic</span>() - child_start, <span class="num">2</span>)
+    logging.<span class="f">exception</span>(<span class="f">f</span><span class="s">"[subagent-{task_index}] failed"</span>)
+    <span class="k">if</span> child_progress_cb:
+        <span class="k">try</span>:
+            <span class="f">child_progress_cb</span>(<span class="s">"subagent.complete"</span>, ...)
+        <span class="k">except</span> Exception <span class="k">as</span> e:
+            logger.<span class="f">debug</span>(<span class="s">"Progress callback failure relay failed: %s"</span>, e)
+    <span class="k">return</span> {
+        <span class="s">"task_index"</span>: task_index,
+        <span class="s">"status"</span>: <span class="s">"error"</span>,
+        <span class="s">"summary"</span>: <span class="k">None</span>,
+        <span class="s">"error"</span>: <span class="f">str</span>(exc),
+        <span class="s">"api_calls"</span>: <span class="num">0</span>,
+        <span class="s">"duration_seconds"</span>: duration,
+        <span class="s">"_child_role"</span>: <span class="f">getattr</span>(child, <span class="s">"_delegate_role"</span>, <span class="k">None</span>),
+    }
+</code></pre>
+
+<p>关键设计:<em>batch 模式下,父 Agent 收到 dict 而不是抛出</em>。这样 5 个 worker 中 1 个挂了,
+   其他 4 个的成功结果仍然被收集。</p>
+
+<h3>16.4.2 0-API-call 超时诊断</h3>
+
+<p>最难调的 bug 是<em>"子 Agent 还没调一次 LLM 就 timeout"</em>——可能是 toolset 检测卡死、
+某个 check_fn 阻塞、import 慢。Hermes 在这种情况下专门写<em>诊断文件</em>:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:1544-1558 (诊断)</span>
+<span class="k">if</span> is_timeout <span class="k">and</span> child_api_calls == <span class="num">0</span>:
+    <span class="c"># 0 API call 还 timeout — 不是 LLM 慢,是别的东西卡了</span>
+    diagnostic_path = log_dir / <span class="f">f</span><span class="s">"subagent-timeout-{task_index}-{ts}.log"</span>
+    <span class="k">with</span> <span class="f">open</span>(diagnostic_path, <span class="s">"w"</span>) <span class="k">as</span> f:
+        f.<span class="f">write</span>(<span class="f">f</span><span class="s">"system_prompt_size: {len(child._system_prompt or '')}\n"</span>)
+        f.<span class="f">write</span>(<span class="f">f</span><span class="s">"toolset_count: {len(child.tools or [])}\n"</span>)
+        f.<span class="f">write</span>(<span class="f">f</span><span class="s">"activity_summary: {child.get_activity_summary()}\n"</span>)
+        <span class="c"># 关键:worker 线程的 Python stack trace</span>
+        f.<span class="f">write</span>(<span class="f">"thread_stack:\n"</span>)
+        <span class="k">if</span> _worker_thread_holder.<span class="f">get</span>(<span class="s">"t"</span>):
+            frames = sys.<span class="f">_current_frames</span>().<span class="f">get</span>(
+                _worker_thread_holder[<span class="s">"t"</span>].ident)
+            <span class="k">if</span> frames:
+                traceback.<span class="f">print_stack</span>(frames, file=f)
+</code></pre>
+
+<p>这种诊断是<em>事后无法重现的 bug</em>的救命稻草。运维看到诊断文件就知道是哪行 Python 卡了。</p>
+
+<h3>16.4.3 subagent_auto_approve:默认拒,opt-in 允</h3>
+
+<p>子 Agent 调危险命令(如 <code>rm -rf</code>)时,审批 callback 走哪?默认<em>"拒"</em>:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:73-111</span>
+<span class="k">def</span> <span class="f">_subagent_auto_deny</span>(command, description, **kwargs) <span class="k">-&gt;</span> str:
+    logger.<span class="f">warning</span>(<span class="s">"Subagent auto-denied: %s (%s)"</span>, command, description)
+    <span class="k">return</span> <span class="s">"deny"</span>
+
+<span class="k">def</span> <span class="f">_subagent_auto_approve</span>(command, description, **kwargs) <span class="k">-&gt;</span> str:
+    logger.<span class="f">warning</span>(<span class="s">"Subagent auto-approved: %s (%s)"</span>, command, description)
+    <span class="k">return</span> <span class="s">"once"</span>
+
+<span class="k">def</span> <span class="f">_get_subagent_approval_callback</span>():
+    cfg = <span class="f">_load_config</span>()
+    val = cfg.<span class="f">get</span>(<span class="s">"subagent_auto_approve"</span>, <span class="k">False</span>)
+    <span class="k">if</span> <span class="f">is_truthy_value</span>(val):
+        <span class="k">return</span> _subagent_auto_approve
+    <span class="k">return</span> _subagent_auto_deny
+</code></pre>
+
+<p>原因:子 Agent 跑在父线程下,父的 prompt_toolkit TUI 是阻塞的。子调 <code>input()</code> 会死锁。
+   所以必须自动决定。默认 deny 是<em>"安全永远优先"</em>。用户要 YOLO 就 opt-in。
+   <em>两种选择都<strong>记日志</strong></em>——审计可见。</p>
+
+<h2 class="section"><span class="secnum">16.5</span>文件状态协调:Hermes 的非显然亮点</h2>
+
+<p>多个子 Agent 并发读写文件时,有个微妙问题:</p>
+
+<p>父 Agent 11:00 读了 <code>foo.py</code>(看 OOP 类结构)→ 派子 Agent → 子 11:05 写了 <code>foo.py</code>
+   (改了一个 method)→ 父 Agent 11:10 想编辑 <code>foo.py</code>(但记得的是 11:00 那版)→ <em>修改基于过期内容</em>。</p>
+
+<p>这种问题<em>静默发生</em>,容易出错。Hermes 用 <code>file_state</code> 模块跟踪:</p>
+
+<pre><code><span class="filename">tools/delegate_tool.py:1476-1487, 1722-1754</span>
+<span class="c"># 派子前快照:父之前读过的文件列表</span>
+parent_reads_snapshot = (
+    <span class="f">list</span>(file_state.<span class="f">known_reads</span>(parent_task_id)) <span class="k">if</span> parent_task_id <span class="k">else</span> []
+)
+
+<span class="c"># ... 子 Agent 跑 ...</span>
+
+<span class="c"># 子跑完,检查"子有没有写父读过的文件"</span>
+<span class="k">if</span> parent_task_id <span class="k">and</span> parent_reads_snapshot:
+    sibling_writes = file_state.<span class="f">writes_since</span>(
+        parent_task_id, wall_start, parent_reads_snapshot)
+    <span class="k">if</span> sibling_writes:
+        mod_paths = <span class="f">sorted</span>({p <span class="k">for</span> paths <span class="k">in</span> sibling_writes.<span class="f">values</span>() <span class="k">for</span> p <span class="k">in</span> paths})
+        reminder = (
+            <span class="s">"\n\n[NOTE: subagent modified files the parent previously read — "</span>
+            <span class="s">"re-read before editing: "</span> + <span class="s">", "</span>.<span class="f">join</span>(mod_paths[:<span class="num">8</span>]) + ...
+        )
+        <span class="k">if</span> entry.<span class="f">get</span>(<span class="s">"summary"</span>):
+            entry[<span class="s">"summary"</span>] = entry[<span class="s">"summary"</span>] + reminder
+</code></pre>
+
+<p>子 Agent 的 return summary 里追加一条<em>"嗨爹,你之前读过 foo.py,我刚改了它,你要继续编辑就先 re-read"</em>。
+   这是 LLM-friendly 的诊断信息——下一轮父就会看到这段并自动 read_file。</p>
+
+<div class="callout good">
+  <span class="label">这是什么级别的设计?</span>
+  这是<em>"了解 LLM 怎么 fail 才能写出来"</em>的代码。
+  没踩过坑的人不会想到"父 Agent 之前看的版本可能过期"。这就是 ch07 第 7.5 节"hooks 化扩展点"
+  的具体例子——hook 在子 Agent 结束这个边界把"文件被改"信息<em>主动喂回</em>给父。
+</div>
+
+<h2 class="section"><span class="secnum">16.6</span>Kanban:跨进程、跨重启的任务队列</h2>
+
+<p>delegate_task 是父 turn 内同步的。但生产里很多任务<em>跨进程跨重启</em>:</p>
+
+<ul>
+  <li>夜里给 50 个 Linear issue 各跑一个 fix</li>
+  <li>每周一上午把 100 个 PR 各做 review</li>
+  <li>多人协作:Alice 创建任务,Bob 的 worker 自动认领</li>
+</ul>
+
+<p>这种场景需要持久化 + 原子认领 + 心跳 + 熔断。Hermes 用 <strong>Kanban</strong>(SQLite + WAL + CAS)。</p>
+
+<h3>16.6.1 SQLite 表结构</h3>
+
+<pre><code><span class="filename">hermes_cli/kanban_db.py:811-940 (节选)</span>
+CREATE TABLE IF NOT EXISTS tasks (
+    id                   TEXT PRIMARY KEY,
+    title                TEXT NOT NULL,
+    body                 TEXT,
+    assignee             TEXT,
+    status               TEXT NOT NULL,
+    priority             INTEGER DEFAULT 0,
+    created_at           INTEGER NOT NULL,
+    started_at           INTEGER,
+    completed_at         INTEGER,
+    workspace_kind       TEXT NOT NULL DEFAULT <span class="s">'scratch'</span>,  <span class="c">-- scratch|worktree|dir</span>
+    workspace_path       TEXT,
+    branch_name          TEXT,
+    claim_lock           TEXT,                              <span class="c">-- 关键 CAS 字段</span>
+    claim_expires        INTEGER,
+    tenant               TEXT,                              <span class="c">-- 软隔离</span>
+    result               TEXT,
+    idempotency_key      TEXT,                              <span class="c">-- 防双创建</span>
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,        <span class="c">-- 熔断计数</span>
+    worker_pid           INTEGER,
+    max_runtime_seconds  INTEGER,
+    last_heartbeat_at    INTEGER,
+    current_run_id       INTEGER,
+    skills               TEXT,                              <span class="c">-- JSON array</span>
+    model_override       TEXT,
+    max_retries          INTEGER                            <span class="c">-- per-task 失败上限覆盖</span>
+);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id             TEXT NOT NULL,
+    profile             TEXT,
+    status              TEXT NOT NULL,    <span class="c">-- running|done|blocked|crashed|timed_out|failed|released</span>
+    started_at          INTEGER NOT NULL,
+    ended_at            INTEGER,
+    outcome             TEXT,             <span class="c">-- completed|blocked|crashed|timed_out|spawn_failed|gave_up|reclaimed</span>
+    summary             TEXT,
+    metadata            TEXT,             <span class="c">-- JSON: {changed_files, tests_run, findings, ...}</span>
+    error               TEXT
+);
+
+CREATE TABLE IF NOT EXISTS task_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id    TEXT NOT NULL,
+    run_id     INTEGER,
+    kind       TEXT NOT NULL,
+    payload    TEXT,                       <span class="c">-- 事件 payload(JSON)</span>
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee_status ON tasks(assignee, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_status          ON tasks(status);
+</code></pre>
+
+<p>三张表的分工:</p>
+
+<ul>
+  <li><strong>tasks</strong>:当前状态(每任务一行)</li>
+  <li><strong>task_runs</strong>:历史尝试(每次 retry 一行)。Crashed 后 re-spawn = 新行。</li>
+  <li><strong>task_events</strong>:append-only 事件流。Gateway 通过订阅推送给用户。</li>
+</ul>
+
+<h3>16.6.2 SQLite WAL + CAS:为什么能扛并发</h3>
+
+<p>这是 Kanban 设计的<em>灵魂</em>:</p>
+
+<blockquote>
+  Concurrency strategy: WAL mode + BEGIN IMMEDIATE for write transactions + compare-and-swap (CAS)
+  updates on tasks.status and tasks.claim_lock. SQLite serializes writers via its WAL lock,
+  so at most one claimer can win any given task. Losers observe zero affected rows and move on
+  — no retry loops, no distributed-lock machinery.
+  <footer>kanban_db.py 文件 docstring</footer>
+</blockquote>
+
+<p>翻译:</p>
+
+<ol>
+  <li>SQLite 开 WAL 模式 → 读不阻塞写,写不阻塞读。</li>
+  <li><code>BEGIN IMMEDIATE</code> → 立刻获取写锁(而非延后)。WAL 内串行化。</li>
+  <li>UPDATE 时用 CAS:<code>UPDATE tasks SET claim_lock=? WHERE id=? AND claim_lock IS NULL</code>。</li>
+  <li>影响 0 行 = 没抢到 = 别人抢了。<em>不重试,直接放弃</em>,看下个 task。</li>
+</ol>
+
+<p>没有 Redis,没有 Zookeeper,没有分布式锁机制。<em>SQLite WAL 是单点,所有 worker 必须共享同一个 DB 文件</em>。
+   这对"一台机器跑 N 个 worker"完美;跨机要么 NFS 要么改用 Postgres。</p>
+
+<pre class="mermaid">
+flowchart LR
+  W1["Worker A<br/>(PID 1234)"] -.UPDATE WHERE claim_lock IS NULL.-&gt; DB[(SQLite + WAL)]
+  W2["Worker B<br/>(PID 5678)"] -.同样 UPDATE.-&gt; DB
+  W3["Worker C"] -.同样 UPDATE.-&gt; DB
+  DB --&gt; WinA["A 抢到<br/>(影响 1 行)"]
+  DB --&gt; LoseB["B 影响 0 行<br/>(直接放弃,看下一个)"]
+  DB --&gt; LoseC["C 影响 0 行<br/>(直接放弃)"]
+  classDef good fill:#ecf3eb,stroke:#2f5d3a,color:#2f5d3a
+  classDef warn fill:#f5ede0,stroke:#a86420,color:#a86420
+  class WinA good
+  class LoseB,LoseC warn
+</pre>
+
+<h3>16.6.3 Board vs Tenant 隔离</h3>
+
+<table>
+  <thead><tr><th></th><th>Board</th><th>Tenant</th></tr></thead>
+  <tbody>
+    <tr><td>本质</td><td>独立 SQLite DB + workspaces</td><td>同 DB 内的一列(tenant 字段)</td></tr>
+    <tr><td>隔离强度</td><td>硬(看不到其他 board 任务)</td><td>软(可 WHERE 过滤)</td></tr>
+    <tr><td>典型用法</td><td>不同项目(atm10-server / website / research)</td><td>同项目不同子模块</td></tr>
+    <tr><td>路径</td><td><code>~/.hermes/kanban/boards/&lt;slug&gt;/</code></td><td>tasks.tenant 字段</td></tr>
+    <tr><td>解析</td><td>HERMES_KANBAN_BOARD env &gt; ~/.hermes/kanban/current 符号链接 &gt; default</td><td>kanban_create(tenant=...)</td></tr>
+  </tbody>
+</table>
+
+<p>设计取舍:Board 给"不同上下文不能互相看见"的强隔离;Tenant 给"同一个 board 多个子项目"的方便过滤。
+   <em>Worker 看不到跨 board 任务</em>是硬保证(env 变量 + path)。</p>
+
+<h2 class="section"><span class="secnum">16.7</span>Kanban Dispatcher:认领-生成-杀死循环</h2>
+
+<p>Dispatcher 是 daemon。<code>dispatch_once()</code> 做 7 件事:</p>
+
+<pre><code><span class="filename">hermes_cli/kanban_db.py:5088-5389 (摘要)</span>
+<span class="k">def</span> <span class="f">dispatch_once</span>(...):
+    result = <span class="f">DispatchResult</span>()
+
+    <span class="c"># 1. Reap zombies(非 Windows)</span>
+    <span class="k">while</span> <span class="k">True</span>:
+        pid, _ = os.<span class="f">waitpid</span>(-<span class="num">1</span>, os.WNOHANG)
+        <span class="k">if</span> pid == <span class="num">0</span>: <span class="k">break</span>
+        <span class="c"># 记录退出状态,区分"crash" vs "protocol violation"</span>
+
+    <span class="c"># 2. 回收 stale claim</span>
+    result.reclaimed = <span class="f">release_stale_claims</span>(conn)
+
+    <span class="c"># 3. 检测无心跳的 running 任务</span>
+    result.stale = <span class="f">detect_stale_running</span>(conn, stale_timeout_seconds)
+
+    <span class="c"># 4. 检测 worker 进程死亡</span>
+    result.crashed = <span class="f">detect_crashed_workers</span>(conn)
+
+    <span class="c"># 5. 强制 max_runtime</span>
+    result.timed_out = <span class="f">enforce_max_runtime</span>(conn)
+
+    <span class="c"># 6. todo → ready(parents 都 done 了的)</span>
+    result.promoted = <span class="f">recompute_ready</span>(conn)
+
+    <span class="c"># 7. 认领 + 生成</span>
+    ready_rows = conn.<span class="f">execute</span>(
+        <span class="s">"SELECT id, assignee FROM tasks "</span>
+        <span class="s">"WHERE status = 'ready' AND claim_lock IS NULL "</span>
+        <span class="s">"ORDER BY priority DESC, created_at ASC"</span>
+    ).<span class="f">fetchall</span>()
+
+    <span class="k">for</span> row <span class="k">in</span> ready_rows:
+        <span class="k">if</span> max_spawn <span class="k">is</span> <span class="k">not</span> <span class="k">None</span> <span class="k">and</span> running_count + spawned &gt;= max_spawn:
+            <span class="k">break</span>
+        <span class="k">if</span> <span class="k">not</span> row[<span class="s">"assignee"</span>]:
+            result.skipped_unassigned.<span class="f">append</span>(row[<span class="s">"id"</span>])
+            <span class="k">continue</span>
+        <span class="c"># 重派 guard:刚失败的别立即重试</span>
+        guard_reason = <span class="f">check_respawn_guard</span>(conn, row[<span class="s">"id"</span>])
+        <span class="k">if</span> guard_reason <span class="k">is</span> <span class="k">not</span> <span class="k">None</span>:
+            result.respawn_guarded.<span class="f">append</span>((row[<span class="s">"id"</span>], guard_reason))
+            <span class="k">continue</span>
+        <span class="c"># 原子认领</span>
+        claimed = <span class="f">claim_task</span>(conn, row[<span class="s">"id"</span>], ttl_seconds=ttl_seconds)
+        <span class="k">if</span> claimed <span class="k">is</span> <span class="k">None</span>:
+            <span class="k">continue</span>   <span class="c"># 被别人抢了,正常</span>
+        <span class="c"># 解析 workspace + 生成进程</span>
+        workspace = <span class="f">resolve_workspace</span>(claimed, board=board)
+        pid = <span class="f">_default_spawn</span>(claimed, <span class="f">str</span>(workspace), board=board)
+        <span class="k">if</span> pid:
+            <span class="f">_set_worker_pid</span>(conn, claimed.id, <span class="f">int</span>(pid))
+</code></pre>
+
+<p>设计要点:</p>
+
+<ul>
+  <li><strong>max_spawn 是 live 并发上限</strong>(不是每 tick 配额)。计算 = "已 running" + "本 tick 新派"。</li>
+  <li><strong>Respawn guard</strong>:刚失败的任务别立即重派(防 thrash)。等下个 tick 或回滚配额。</li>
+  <li><strong>Spawn 失败也走熔断</strong>:<code>_record_spawn_failure</code> 增 <code>consecutive_failures</code>,超阈值自动 block。</li>
+</ul>
+
+<h3>16.7.1 Stale Claim Reclamation——带活性检查</h3>
+
+<p>Claim 有 TTL(默认 15 分钟)。过期了就回收。但<em>"过期"</em>不等于<em>"worker 死了"</em>——
+也许 worker 正卡在一个 30 分钟的 LLM call 里。所以:</p>
+
+<pre><code><span class="filename">hermes_cli/kanban_db.py:2516-2626</span>
+<span class="k">def</span> <span class="f">release_stale_claims</span>(conn):
+    host_prefix = <span class="f">f</span><span class="s">"{_claimer_id().split(':', 1)[0]}:"</span>
+    <span class="c"># 对每个 expired claim:</span>
+    <span class="k">for</span> row <span class="k">in</span> expired_rows:
+        host_local = row[<span class="s">"claim_lock"</span>].<span class="f">startswith</span>(host_prefix)
+        <span class="k">if</span> host_local <span class="k">and</span> row[<span class="s">"worker_pid"</span>] <span class="k">and</span> <span class="f">_pid_alive</span>(row[<span class="s">"worker_pid"</span>]):
+            <span class="c"># PID 还活着 — 延长 claim,不回收</span>
+            new_expires = now + <span class="f">_resolve_claim_ttl_seconds</span>()
+            <span class="f">_append_event</span>(conn, row[<span class="s">"id"</span>], <span class="s">"claim_extended"</span>, {...})
+            <span class="k">continue</span>
+        <span class="c"># 死了或不在本机 — 杀掉(如果还在本机) + reset 状态</span>
+        termination = <span class="f">_terminate_reclaimed_worker</span>(row[<span class="s">"worker_pid"</span>], ...)
+        <span class="c"># UPDATE: status='ready', claim_lock=NULL, worker_pid=NULL</span>
+</code></pre>
+
+<p>这条<em>"PID 还活着就延期"</em>的设计是 Hermes 的<em>"对慢 LLM 不杀"</em>的核心保护——
+   大 model + reasoning + 长 prompt 容易 30 分钟一个 round trip,不能因为这个就杀。</p>
+
+<h3>16.7.2 心跳机制</h3>
+
+<p>Worker 可以主动延期 claim,不依赖 dispatcher 的活性检查。<code>kanban_heartbeat</code> 工具:</p>
+
+<pre><code><span class="filename">tools/kanban_tools.py:552-600</span>
+<span class="k">def</span> <span class="f">_handle_heartbeat</span>(args, **kw):
+    <span class="s">"""Signal that worker is alive. Extends claim TTL + records event."""</span>
+    tid = <span class="f">_default_task_id</span>(args.<span class="f">get</span>(<span class="s">"task_id"</span>))
+    claim_lock = os.environ.<span class="f">get</span>(<span class="s">"HERMES_KANBAN_CLAIM_LOCK"</span>)
+    kb.<span class="f">heartbeat_claim</span>(conn, tid, claimer=claim_lock)   <span class="c"># 关键:延 TTL</span>
+    ok = kb.<span class="f">heartbeat_worker</span>(conn, tid, note=note, ...)
+    <span class="k">return</span> <span class="f">_ok</span>(task_id=tid)
+</code></pre>
+
+<p>Agent 跑 100GB 数据 ETL 时,主动每 5 分钟调一下 <code>kanban_heartbeat(note="processing batch 12/50")</code>,
+   既延期了 claim,又留了进度记录。</p>
+
+<h2 class="section"><span class="secnum">16.8</span>Worker 进程的环境注入</h2>
+
+<p>Dispatcher 生成 worker 时注入大量 env vars:</p>
+
+<pre><code><span class="filename">hermes_cli/kanban_db.py:5682-5741</span>
+env = <span class="f">dict</span>(os.environ)
+
+<span class="c"># Profile-scoped 配置</span>
+<span class="k">try</span>:
+    env[<span class="s">"HERMES_HOME"</span>] = <span class="f">resolve_profile_env</span>(profile_arg)
+<span class="k">except</span> FileNotFoundError:
+    <span class="k">pass</span>
+
+<span class="c"># 任务 context</span>
+env[<span class="s">"HERMES_KANBAN_TASK"</span>] = task.id
+env[<span class="s">"HERMES_KANBAN_WORKSPACE"</span>] = workspace
+env[<span class="s">"HERMES_KANBAN_RUN_ID"</span>] = <span class="f">str</span>(task.current_run_id)
+env[<span class="s">"HERMES_KANBAN_CLAIM_LOCK"</span>] = task.claim_lock     <span class="c"># 心跳需要</span>
+
+<span class="c"># 深度防御:board 路径硬绑</span>
+env[<span class="s">"HERMES_KANBAN_DB"</span>] = <span class="f">str</span>(<span class="f">kanban_db_path</span>(board=board))
+env[<span class="s">"HERMES_KANBAN_BOARD"</span>] = resolved_board
+env[<span class="s">"HERMES_PROFILE"</span>] = profile_arg
+
+cmd = [
+    *<span class="f">_resolve_hermes_argv</span>(),
+    <span class="s">"-p"</span>, profile_arg,
+    <span class="s">"--accept-hooks"</span>,
+    <span class="s">"--skills"</span>, <span class="s">"kanban-worker"</span>,    <span class="c"># 自动加载 worker skill</span>
+]
+<span class="k">if</span> task.model_override:
+    cmd.<span class="f">extend</span>([<span class="s">"-m"</span>, task.model_override])
+cmd.<span class="f">extend</span>([<span class="s">"chat"</span>, <span class="s">"-q"</span>, prompt])   <span class="c"># prompt = "work kanban task &lt;id&gt;"</span>
+
+proc = subprocess.<span class="f">Popen</span>(
+    cmd,
+    cwd=workspace <span class="k">if</span> os.path.<span class="f">isdir</span>(workspace) <span class="k">else</span> <span class="k">None</span>,
+    stdin=subprocess.DEVNULL,
+    stdout=log_f,
+    stderr=subprocess.STDOUT,
+    env=env,
+    start_new_session=<span class="k">True</span>,             <span class="c"># 脱离 tty,父 Ctrl+C 不级联</span>
+)
+</code></pre>
+
+<p>关键设计:</p>
+
+<ol>
+  <li><strong><code>start_new_session=True</code></strong>:子进程脱离 tty——父按 Ctrl+C 时不会被级联 kill。</li>
+  <li><strong>DB 路径硬绑 env</strong>:即使 worker 的 profile 改了 HERMES_HOME,kanban 路径还是 dispatcher 那份。
+      防 worker 误写到错 board。</li>
+  <li><strong>kanban-worker skill 自动 load</strong>:确保 worker 知道"我是 kanban worker,该用 kanban_heartbeat
+      和 kanban_complete"。</li>
+</ol>
+
+<h2 class="section"><span class="secnum">16.9</span>失败熔断:default 2 次就停</h2>
+
+<p>累积失败:</p>
+
+<pre><code><span class="filename">hermes_cli/kanban_db.py:4750-4815</span>
+<span class="k">if</span> failure_limit <span class="k">is</span> <span class="k">None</span>:
+    failure_limit = DEFAULT_FAILURE_LIMIT   <span class="c"># = 2</span>
+effective_limit = task.max_retries <span class="k">if</span> task.max_retries <span class="k">is</span> <span class="k">not</span> <span class="k">None</span> <span class="k">else</span> failure_limit
+
+<span class="k">if</span> consecutive_failures &gt;= effective_limit:
+    <span class="c"># Auto-block: status = 'blocked', outcome = 'gave_up'</span>
+    <span class="f">_append_event</span>(conn, task_id, <span class="s">"spawn_auto_blocked"</span>, {...})
+    <span class="k">return</span> <span class="k">True</span>
+</code></pre>
+
+<p>默认 2 次失败就 auto-block。<em>不是 3,不是 5</em>——是<em>2</em>。原因:Hermes 设计者观察到
+真实失败模式里"第二次失败就有 80% 概率是<strong>结构性问题</strong>"(missing dep、auth 问题、prompt 写错)
+而不是<em>"flaky 偶发"</em>。所以快速熔断省 token。</p>
+
+<p>遇到结构性问题该<em>人介入</em>而不是机器空转:Auto-block 之后,任务停在 blocked 状态,
+   Linear/Slack notifier 推 owner 看。</p>
+
+<h2 class="section"><span class="secnum">16.10</span>本章带走的</h2>
+
+<ul>
+  <li>多 Agent 有两个模型:<strong>同步 delegate_task</strong>(turn 内函数调用)和<strong>异步 Kanban</strong>(SQLite 队列)。</li>
+  <li>delegate_task 的 batch 模式用 ThreadPoolExecutor,不用 asyncio。每子一个独立 executor + worker 线程隔离。</li>
+  <li><strong>子 Agent 上下文完全 reset</strong>:全新 system prompt、no memory、no context files、no clarify。
+      只继承 credential / model / session_db。</li>
+  <li><strong>Role + 深度上限</strong>双重防御:role="orchestrator" 在深度上限处<em>静默</em>降级为 leaf。</li>
+  <li><strong>_last_resolved_tool_names</strong> save/restore 是<em>实用补丁</em>——理想是 ContextVar,现实是 global。</li>
+  <li><strong>0-API-call 超时诊断</strong>:子还没调 LLM 就 timeout 时写专门诊断文件(prompt size + toolset + 线程栈)。</li>
+  <li><strong>文件状态协调</strong>:子改了父读过的文件,父的 result summary 自动追加"re-read before editing"提示。</li>
+  <li><strong>Kanban 用 SQLite WAL + CAS</strong> 实现原子认领。<em>没抢到就放弃,不重试</em>。</li>
+  <li><strong>Stale claim 带活性检查</strong>:PID 活着就延期,不回收。保护慢 LLM call。</li>
+  <li><strong>心跳机制</strong>让 worker 主动延期 + 记进度。</li>
+  <li><strong>失败熔断 default 2 次</strong>:结构性问题别空转。</li>
+  <li><strong>Board 硬隔离 / Tenant 软隔离</strong>:不同强度的多项目分离。</li>
+</ul>
+
+<div class="callout good">
+  <span class="label">这一章是 Anthropic Harness Engineering 的具体实现</span>
+  ch13 提到 Anthropic 2025 的"long-running agent harness"——两 Agent 协作 + 文件系统状态外化 + 失败恢复。
+  Hermes 的 delegate_task + Kanban 就是这个范式的开源具体实现。
+  你下次想搭"agent 跑一天不偏离"的系统时,本章这 11 条原则是<em>必须的</em>砖。
+</div>
+
+<div class="exercises">
+  <h3>章末练习</h3>
+  <ol>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      子 Agent 的 system prompt 完全独立于父——这跟 ch05 讲的"system prompt 不能改避免破 cache"
+      矛盾吗?分析两者关系。
+    </li>
+    <li>
+      <span class="difficulty d-easy">Easy</span>
+      为什么 delegate_task 失败<em>返回 dict 而不是 raise</em>?用 batch 模式 5 个子有 1 个挂的场景说明。
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      Kanban 的 CAS 用 <code>UPDATE WHERE claim_lock IS NULL</code>。
+      如果改成 <code>SELECT</code> 看 NULL 再 <code>UPDATE</code> 会出什么经典并发 bug?
+    </li>
+    <li>
+      <span class="difficulty d-medium">Medium</span>
+      失败 default 2 次熔断。但 LLM API 偶发 rate limit 也算失败。
+      你怎么改 dispatcher 区分"flaky 临时"和"结构性失败"?
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      Board 硬隔离用<em>不同 SQLite DB</em>。如果需求是"一个跨 board 任务"(比如 task A 在 board X 完成才能跑 task B 在 board Y),
+      你怎么设计?给两个方案,讨论 trade-off。
+    </li>
+    <li>
+      <span class="difficulty d-hard">Hard</span>
+      文件状态协调依赖 <code>file_state</code> 模块跟踪每个 task_id 的 read/write。
+      如果用户在 task 外手动 <code>vim foo.py</code> 改了文件,Hermes 不知道。
+      设计一种<em>"外部修改 detection"</em>机制(提示:文件 mtime + 哈希)。
+    </li>
+  </ol>
+</div>
+
+<div class="chapter-foot">
+  <a class="prev" href="ch15-background.html">
+    <div class="direction">← 上一章</div>
+    <div class="title">第 15 章 · 后台执行栈</div>
+  </a>
+  <a class="next" href="ch17-ide-surfaces.html">
+    <div class="direction">下一章 →</div>
+    <div class="title">第 17 章 · IDE 集成与 PTY 桥</div>
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>
